@@ -15,7 +15,7 @@ import {
 const router: IRouter = Router();
 
 // ─── Supported chains for flash loans ────────────────────────────────────────
-const FLASH_LOAN_CHAINS = ["ethereum", "arbitrum", "polygon", "optimism", "avalanche"];
+const FLASH_LOAN_CHAINS = ["ethereum", "arbitrum", "polygon", "optimism", "avalanche", "sepolia"];
 
 function generateOpportunities() {
   const ethPrice  = getTokenPrice("ETH")?.price  ?? 2000;

@@ -18,6 +18,7 @@ const AAVE_V3_POOL: Record<string, string> = {
   arbitrum:  "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
   avalanche: "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
   optimism:  "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+  sepolia:   "0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951",
 };
 
 // ─── Uniswap V3 SwapRouter02 for arbitrage leg ──────────────────────────────
@@ -27,6 +28,7 @@ const SWAP_ROUTER: Record<string, string> = {
   arbitrum:  "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
   optimism:  "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
   avalanche: "0xbb00FF08d01D300023C629E8fFfFcb65A5a578cE",
+  sepolia:   "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
 };
 
 // ─── USDC (flash loan borrow asset) per chain ────────────────────────────────
@@ -36,6 +38,7 @@ const USDC: Record<string, { address: string; decimals: number }> = {
   arbitrum:  { address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", decimals: 6 },
   optimism:  { address: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", decimals: 6 },
   avalanche: { address: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", decimals: 6 },
+  sepolia:   { address: "0x94a9D9AC8a22534E3FaCa9F4e7F2E2cf85d5E4C8", decimals: 6 },
 };
 
 // WETH / wrapped native per chain
@@ -45,6 +48,7 @@ const WETH: Record<string, string> = {
   arbitrum:  "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
   optimism:  "0x4200000000000000000000000000000000000006",
   avalanche: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+  sepolia:   "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
 };
 
 const AAVE_POOL_ABI = [
@@ -151,6 +155,12 @@ export async function executeFlashLoan(params: {
   opportunityId: string;
 }): Promise<FlashLoanResult> {
   const { chain, loanAmountUsd, route, opportunityId } = params;
+
+  // DRY_RUN check — if set to true, simulate instead of executing real on-chain tx
+  const isDryRun = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
+  if (isDryRun) {
+    return paperTradeResult(chain, loanAmountUsd, route, "DRY_RUN mode — simulated execution");
+  }
 
   const usdc        = USDC[chain];
   const wethAddress = WETH[chain];

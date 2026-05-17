@@ -6,6 +6,7 @@ const ALCHEMY_ETH = ALCHEMY_KEY ? `https://eth-mainnet.g.alchemy.com/v2/${ALCHEM
 const ALCHEMY_POLYGON = ALCHEMY_KEY ? `https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}` : "https://polygon.drpc.org";
 const ALCHEMY_ARB = ALCHEMY_KEY ? `https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}` : "https://arb1.arbitrum.io/rpc";
 const ALCHEMY_OPT = ALCHEMY_KEY ? `https://opt-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}` : "https://mainnet.optimism.io";
+const ALCHEMY_SEPOLIA = ALCHEMY_KEY ? `https://eth-sepolia.g.alchemy.com/v2/${ALCHEMY_KEY}` : "https://rpc.sepolia.org";
 
 const RPC_URLS: Record<string, string> = {
   ethereum: process.env.ETH_RPC_URL || ALCHEMY_ETH,
@@ -14,6 +15,7 @@ const RPC_URLS: Record<string, string> = {
   bsc: process.env.BSC_RPC_URL || "https://bsc-dataseed1.binance.org",
   avalanche: process.env.AVAX_RPC_URL || "https://api.avax.network/ext/bc/C/rpc",
   optimism: process.env.OP_RPC_URL || ALCHEMY_OPT,
+  sepolia: process.env.SEPOLIA_RPC_URL || ALCHEMY_SEPOLIA,
 };
 
 interface SystemWalletInfo {
@@ -102,6 +104,7 @@ const CHAIN_IDS: Record<string, number> = {
   bsc: 56,
   avalanche: 43114,
   optimism: 10,
+  sepolia: 11155111,
 };
 
 const providers: Record<string, ethers.JsonRpcProvider> = {};
@@ -369,6 +372,7 @@ export const CHAIN_DISPLAY: Record<string, { name: string; nativeSymbol: string;
   bsc: { name: "BNB Smart Chain", nativeSymbol: "BNB", explorerUrl: "https://bscscan.com", chainId: 56 },
   avalanche: { name: "Avalanche C-Chain", nativeSymbol: "AVAX", explorerUrl: "https://snowtrace.io", chainId: 43114 },
   optimism: { name: "Optimism", nativeSymbol: "ETH", explorerUrl: "https://optimistic.etherscan.io", chainId: 10 },
+  sepolia: { name: "Sepolia Testnet", nativeSymbol: "ETH", explorerUrl: "https://sepolia.etherscan.io", chainId: 11155111 },
 };
 
 export async function getPortfolio(address: string): Promise<{

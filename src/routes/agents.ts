@@ -162,7 +162,7 @@ function createAgent(
 
 const agents: Agent[] = [
   createAgent("ARB Hunter Alpha", "triangular-arb", 10000, "Aggressive", ["ethereum", "polygon", "arbitrum"]),
-  createAgent("Flash Scout Beta", "flash-loan-arb", 0, "Aggressive", ["ethereum", "bsc"]),
+  createAgent("Flash Scout Beta", "flash-loan-arb", 0, "Aggressive", ["sepolia"]),
   createAgent("Grid Master Gamma", "grid-trading", 5000, "Balanced", ["polygon"]),
   createAgent("Momentum Delta", "momentum", 8000, "Balanced", ["ethereum", "avalanche"]),
   createAgent("Smart DCA Epsilon", "dca-smart", 2000, "Conservative", ["ethereum", "polygon"]),
