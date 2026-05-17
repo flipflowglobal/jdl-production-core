@@ -1,0 +1,15 @@
+{
+  "name": "jdl-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "compile": "npx hardhat compile",
+    "deploy:arbitrum": "npx hardhat run scripts/deploy.ts --network arbitrum",
+    "deploy:ethereum": "npx hardhat run scripts/deploy.ts --network ethereum",
+    "deploy:all": "npx hardhat run scripts/deploy-all.ts"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "hardhat": "^2.19.0"
+  }
+}
