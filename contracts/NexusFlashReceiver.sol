@@ -10,7 +10,7 @@ import "./interfaces/IAaveV3Pool.sol";
 import "./interfaces/IUniswapV3Router.sol";
 import "./interfaces/ICurvePool.sol";
 import "./interfaces/IBalancerVault.sol";
-import "./libraries/ArbitrageLib.sol";
+import "./ArbitrageLib.sol";
 
 /**
  * @title NexusFlashReceiver
