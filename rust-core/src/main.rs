@@ -80,11 +80,83 @@ fn evm_analyze(hex_str: String) -> serde_json::Value {
     })
 }
 
+fn yul_ir(hex_str: String) -> serde_json::Value {
+    let bytes = hex::decode(&hex_str).unwrap_or_else(|e| {
+        eprintln!("Invalid hex: {e}");
+        std::process::exit(1);
+    });
+    let disasm = evm::disasm::disassemble(&bytes);
+    let cfg = evm::cfg::build_cfg(&disasm);
+    let sigs = evm::signatures::recover_signatures(&disasm);
+    let mut exec = evm::symbolic::SymExec::new(&disasm, &cfg);
+    let results = exec.run();
+
+    let mut blocks: Vec<serde_json::Value> = results.iter()
+        .map(|(&block_id, result)| {
+            serde_json::json!({
+                "block_id": block_id,
+                "stmts": result.stmts,
+            })
+        })
+        .collect();
+    blocks.sort_by_key(|b| b["block_id"].as_u64().unwrap_or(0));
+    serde_json::Value::Array(blocks)
+}
+
+fn storage_layout(hex_str: String) -> serde_json::Value {
+    let bytes = hex::decode(&hex_str).unwrap_or_else(|e| {
+        eprintln!("Invalid hex: {e}");
+        std::process::exit(1);
+    });
+    let disasm = evm::disasm::disassemble(&bytes);
+    let cfg = evm::cfg::build_cfg(&disasm);
+    let sigs = evm::signatures::recover_signatures(&disasm);
+    let decompiled = evm::decompiler::decompile(&disasm, &cfg, &sigs);
+    serde_json::to_value(decompiled.storage_slots).unwrap_or_else(|e| {
+        eprintln!("Serialization error: {e}");
+        std::process::exit(1);
+    })
+}
+
+fn abi_decode(hex_str: String) -> serde_json::Value {
+    let bytes = hex::decode(&hex_str).unwrap_or_else(|e| {
+        eprintln!("Invalid hex: {e}");
+        std::process::exit(1);
+    });
+    let disasm = evm::disasm::disassemble(&bytes);
+    let cfg = evm::cfg::build_cfg(&disasm);
+    let sigs = evm::signatures::recover_signatures(&disasm);
+    let decompiled = evm::decompiler::decompile(&disasm, &cfg, &sigs);
+
+    let functions: Vec<serde_json::Value> = decompiled.functions.iter().map(|f| {
+        serde_json::json!({
+            "selector": f.selector,
+            "name": f.name,
+            "params": f.params,
+        })
+    }).collect();
+
+    serde_json::Value::Array(functions)
+}
+
+fn security_scan(hex_str: String) -> serde_json::Value {
+    let bytes = hex::decode(&hex_str).unwrap_or_else(|e| {
+        eprintln!("Invalid hex: {e}");
+        std::process::exit(1);
+    });
+    let disasm = evm::disasm::disassemble(&bytes);
+    let report = evm::security::analyze_security(&disasm);
+    serde_json::to_value(report).unwrap_or_else(|e| {
+        eprintln!("Serialization error: {e}");
+        std::process::exit(1);
+    })
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: jdl-core <command>");
-        eprintln!("Commands: find-routes, quote-swap, flash-loan, evm-analyze");
+        eprintln!("Commands: find-routes, quote-swap, flash-loan, evm-analyze, yul-ir, storage-layout, abi-decode, security-scan");
         std::process::exit(1);
     }
 
@@ -110,6 +182,22 @@ fn main() {
         "evm-analyze" => {
             let hex_str: String = serde_json::from_str(&input).expect("Invalid hex string");
             evm_analyze(hex_str)
+        }
+        "yul-ir" => {
+            let hex_str: String = serde_json::from_str(&input).expect("Invalid hex string");
+            yul_ir(hex_str)
+        }
+        "storage-layout" => {
+            let hex_str: String = serde_json::from_str(&input).expect("Invalid hex string");
+            storage_layout(hex_str)
+        }
+        "abi-decode" => {
+            let hex_str: String = serde_json::from_str(&input).expect("Invalid hex string");
+            abi_decode(hex_str)
+        }
+        "security-scan" => {
+            let hex_str: String = serde_json::from_str(&input).expect("Invalid hex string");
+            security_scan(hex_str)
         }
         _ => {
             eprintln!("Unknown command: {}", args[1]);

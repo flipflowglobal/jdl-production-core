@@ -20,11 +20,48 @@ from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import Optional
 
-from core.config import (
-    ACTIVE_TOKENS, MAX_ROUTES_PER_SCAN, ROUTE_TIMEOUT_SEC, MIN_PROFIT_USD
-)
-from core.multicall import MulticallEngine, PoolSnapshot
-from core.web3_manager import Web3Manager
+try:
+    from core.config import (
+        ACTIVE_TOKENS, MAX_ROUTES_PER_SCAN, ROUTE_TIMEOUT_SEC, MIN_PROFIT_USD
+    )
+    from core.multicall import MulticallEngine, PoolSnapshot
+    from core.web3_manager import Web3Manager
+except ImportError:
+    # Stub definitions so the module can be loaded without the core package.
+    # Replace these with real implementations when deploying.
+    logger.warning("core package not found — using stubs in route_finder")
+    ACTIVE_TOKENS: dict[str, str] = {
+        "WETH": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        "USDC": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "USDT": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+        "DAI":  "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+    }
+    MAX_ROUTES_PER_SCAN = 10
+    ROUTE_TIMEOUT_SEC   = 10
+    MIN_PROFIT_USD      = 1.0
+
+    from dataclasses import dataclass
+
+    class MulticallEngine:
+        def __init__(self, *args, **kwargs):
+            pass
+        def fetch_pool_snapshots(self, pools):
+            return []
+
+    @dataclass
+    class PoolSnapshot:
+        address: str = ""
+        token0: str = ""
+        token1: str = ""
+        price_token1_per_token0: float = 0.0
+        fee: int = 3000
+        liquidity: int = 0
+        has_liquidity: bool = False
+
+    class Web3Manager:
+        @staticmethod
+        def get():
+            return None
 
 logger = logging.getLogger(__name__)
 
