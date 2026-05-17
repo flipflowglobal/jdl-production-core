@@ -141,7 +141,7 @@ export const STRATEGIES: StrategyConfig[] = [
     minCapital: 0,
     expectedWinRate: 94.1,
     expectedMonthlyReturn: 12.4,
-    supportedChains: ["ethereum", "polygon", "arbitrum"],
+    supportedChains: ["ethereum", "polygon", "arbitrum", "sepolia"],
     parameters: [
       { key: "minProfitUsd", label: "Min Profit ($)", type: "number", default: 50, min: 10, max: 1000, description: "Minimum net profit after gas to execute" },
       { key: "maxLoanUsd", label: "Max Loan ($)", type: "number", default: 500000, min: 10000, max: 5000000, description: "Maximum flash loan amount" },

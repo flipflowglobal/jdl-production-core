@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from "child_process";
 import path from "path";
+import { logger } from "./logger";
 
 const PYTHON_WORKER = process.env.PYTHON_WORKER_PATH || path.join(__dirname, "../../python/bridge.py");
 
@@ -10,10 +11,16 @@ class PythonBridge {
 
   start(): void {
     if (this.proc) return;
-    this.proc = spawn("python3", [PYTHON_WORKER], {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env },
-    });
+    try {
+      this.proc = spawn("python3", [PYTHON_WORKER], {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env },
+      });
+    } catch (err) {
+      logger.error({ err }, "Failed to spawn Python worker");
+      this.proc = null;
+      return;
+    }
     let buffer = "";
     this.proc.stdout?.on("data", (data) => {
       buffer += data.toString();
@@ -41,6 +48,9 @@ class PythonBridge {
 
   async call(method: string, params: any[] = []): Promise<any> {
     if (!this.proc) this.start();
+    if (!this.proc) {
+      return { error: "Python worker is not available" };
+    }
     const id = String(++this.idCounter);
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });

@@ -1,11 +1,12 @@
+import "dotenv/config";
 import express, { type Express } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import session from "express-session";
 import pinoHttp from "pino-http";
+import { createProxyMiddleware } from "http-proxy-middleware";
 import { apiKeyCheck } from "./middleware/auth";
-import router from "./routes";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
@@ -62,6 +63,18 @@ app.use(pinoHttp({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use("/api", router);
+const TRADING_TARGET = process.env.TRADING_URL || "http://trading:8501";
+const WORKER_TARGET = process.env.WORKER_URL || "http://worker:8502";
 
-export default app;
+app.use("/api/flash-loans", createProxyMiddleware({ target: TRADING_TARGET, changeOrigin: true }));
+app.use("/api/agents", createProxyMiddleware({ target: TRADING_TARGET, changeOrigin: true }));
+app.use("/api/agent-wallets", createProxyMiddleware({ target: TRADING_TARGET, changeOrigin: true }));
+app.use("/api/strategies", createProxyMiddleware({ target: TRADING_TARGET, changeOrigin: true }));
+app.use("/api/blockchain", createProxyMiddleware({ target: TRADING_TARGET, changeOrigin: true }));
+
+app.use("/api", createProxyMiddleware({ target: WORKER_TARGET, changeOrigin: true }));
+
+const port = Number(process.env.PORT) || 8500;
+app.listen(port, () => {
+  logger.info({ port, trading: TRADING_TARGET, worker: WORKER_TARGET }, "API Gateway started");
+});

@@ -1,6 +1,11 @@
+import { logger } from "../lib/logger";
+
 const SYSTEM_FEE_RATE = 0.0075;
 const FUNDING_FEE_RATE = 0.02;
-const MAIN_WALLET = "YOUR_ETH_WALLET_ADDRESS";
+const MAIN_WALLET = process.env.MAIN_WALLET || (() => {
+  logger.warn("MAIN_WALLET env var not set — using hardcoded fallback address");
+  return "YOUR_ETH_WALLET_ADDRESS";
+})();
 
 export interface FeeRecord {
   id: string;

@@ -1,0 +1,11 @@
+node_modules/
+.git/
+.env
+__pycache__/
+*.pyc
+dist/
+target/
+data/
+*.log
+.vscode/
+.idea/

@@ -1,7 +1,9 @@
 import { Pool } from "pg";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { encryptPrivateKey, decryptPrivateKey } from "./encryption.js";
 
-const pool = new Pool({
+export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined,
   max: 10,
@@ -12,6 +14,18 @@ const pool = new Pool({
 pool.on("error", (err) => {
   console.error("[DB] Unexpected pool error:", err.message);
 });
+
+export async function initDatabase() {
+  try {
+    // Resolve schema.sql from project root (two levels up from dist/services/)
+    const schemaPath = join(__dirname, "..", "..", "src", "services", "schema.sql");
+    const sql = readFileSync(schemaPath, "utf-8");
+    await query(sql);
+    console.log("[DB] Schema initialized");
+  } catch (err: any) {
+    console.warn("[DB] Schema init skipped:", err.message);
+  }
+}
 
 export async function query(sql: string, params?: any[]) {
   let retries = 2;
