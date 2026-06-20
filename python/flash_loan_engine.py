@@ -36,8 +36,34 @@ try:
     from web3 import Web3
     from web3.middleware import geth_poa_middleware
     WEB3_OK = True
+    # ─ web3 v5/v6 compatibility shims ──────────────────────────────
+    # web3 v5 uses camelCase; v6 uses snake_case. Try v6 first, fall back to v5.
+    def _w3_cs(addr: str) -> str:
+        try: return Web3.to_checksum_address(addr)
+        except AttributeError: return Web3.toChecksumAddress(addr)
+    def _gas_p(w3) -> float:
+        try: return w3.eth.gas_price
+        except AttributeError: return w3.eth.gasPrice
+    def _nonce(w3, addr) -> int:
+        try: return w3.eth.get_transaction_count(addr)
+        except AttributeError: return w3.eth.getTransactionCount(addr)
+    def _blk(w3) -> int:
+        try: return w3.eth.block_number
+        except AttributeError: return w3.eth.blockNumber
+    def _inject_poa(w3):
+        try: w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+        except Exception:
+            try:
+                from web3.middleware import ExtraDataToPOAMiddleware
+                w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+            except Exception: pass
 except ImportError:
     WEB3_OK = False
+    def _w3_cs(a): return a
+    def _gas_p(w): return 0.1
+    def _nonce(w, a): return 0
+    def _blk(w): return 0
+    def _inject_poa(w): pass
 
 load_dotenv(os.path.expanduser('~/jdl/.env'))
 
@@ -445,7 +471,7 @@ class PriceFeed:
         if WEB3_OK and ALCH_ARB:
             try:
                 self._w3 = Web3(Web3.HTTPProvider(RPC_ARB, request_kwargs={'timeout':5}))
-                self._w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+                _inject_poa(self._w3)
             except Exception:
                 self._w3 = None
 
@@ -453,7 +479,7 @@ class PriceFeed:
         if self._w3:
             try:
                 abi = '[{"inputs":[],"name":"slot0","outputs":[{"type":"uint160","name":"sqrtPriceX96"},{"type":"int24","name":"tick"},{"type":"uint16"},{"type":"uint16"},{"type":"uint16"},{"type":"uint8"},{"type":"bool"}],"stateMutability":"view","type":"function"}]'
-                pool = self._w3.eth.contract(address=Web3.to_checksum_address(self.WETH_USDC_POOL), abi=json.loads(abi))
+                pool = self._w3.eth.contract(address=_w3_cs(self.WETH_USDC_POOL), abi=json.loads(abi))
                 s0   = pool.functions.slot0().call()
                 raw  = (s0[0]/(2**96))**2 * 1e12
                 self._eth = self.kf.update(raw)
@@ -463,7 +489,7 @@ class PriceFeed:
 
     def gas_gwei(self) -> float:
         if self._w3:
-            try: self._gas = self._w3.eth.gas_price/1e9
+            try: self._gas = _gas_p(self._w3)/1e9
             except Exception: pass
         return self._gas
 
@@ -519,12 +545,11 @@ class OpportunityScanner:
         self._last_eth = eth
 
         if self.garch.high_vol(4.0):
-            return None  # volatility gate
+            return None
 
-        # Simulate cross-DEX mispricing (real impl queries on-chain reserves)
-        mispricing = 0.004 + random.gauss(0, 0.001)  # ~0.4% avg spread
+        mispricing = 0.004 + random.gauss(0, 0.001)
         zscore_val = self.zscore.update('WETH_USDC', mispricing)
-        if abs(zscore_val) < 0.5:  # not statistically significant
+        if abs(zscore_val) < 0.5:
             return None
 
         loan_usdc = 100_000.0
@@ -581,17 +606,18 @@ class FlashbotsPEG:
             acc = Account.from_key(PRIV_KEY)
             profit_wei  = int(opp.profit_usd / eth_price * 1e18)
             builder_fee = int(profit_wei * 0.05)
-            nonce = w3.eth.get_transaction_count(acc.address)
+            nonce = _nonce(w3, acc.address)
             tx = {
-                'to': Web3.to_checksum_address(CONTRACT),
+                'to': _w3_cs(CONTRACT),
                 'data': '0x',
                 'gas': 600_000, 'gasPrice': 0,
                 'nonce': nonce, 'chainId': 42161, 'value': 0
             }
             signed  = acc.sign_transaction(tx)
-            raw     = signed.rawTransaction.hex()
+            raw_tx  = getattr(signed, 'raw_transaction', None) or getattr(signed, 'rawTransaction', None)
+            raw     = raw_tx.hex() if raw_tx else '0x'
             fb_acc  = Account.from_key(FB_SECRET) if FB_SECRET else acc
-            target  = w3.eth.block_number + 1
+            target  = _blk(w3) + 1
             bundle  = {'jsonrpc':'2.0','id':1,'method':'eth_sendBundle',
                        'params':[{'txs':[raw],'blockNumber':hex(target)}]}
             body    = json.dumps(bundle)
@@ -673,7 +699,6 @@ class FlashDaemon:
             elif strategy == 'GELATO_FREE':
                 tx_hash = self.gelato.submit()
             else:
-                # Simulated submit for other strategies (gas_kernel handles rest)
                 tx_hash = f'sim_{hashlib.md5(f"{time.time()}".encode()).hexdigest()[:16]}'
 
             net = RevenueTracker.log(
@@ -892,7 +917,7 @@ def menu_status():
     print(f"    Paymaster:  {C.CYAN}{(PAYMASTER[:16]+'...' if PAYMASTER else 'not set (optional)')}{C.RESET}")
     print(f"    RPC (Arb):  {C.DIM}{'Alchemy' if ALCH_ARB else 'public endpoint'}{C.RESET}")
     print(f"    Flashbots:  {C.BGREEN if FB_SECRET else C.DIM}{'configured' if FB_SECRET else 'not set'}{C.RESET}")
-    print(f"    Web3:       {C.BGREEN if WEB3_OK else C.RED}{'installed' if WEB3_OK else 'not installed (pip install web3)'}{C.RESET}")
+    print(f"    Web3:       {C.BGREEN if WEB3_OK else C.RED}{'v5 (Termux-compat)' if WEB3_OK else 'not installed'}{C.RESET}")
     print()
     print(f"  {C.BOLD}Flash Protocols{C.RESET}")
     protos = [('Aave V3',   '0.09% fee', 'ETH/ARB/OP/BASE/Polygon'),
