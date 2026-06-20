@@ -508,6 +508,7 @@ class OpportunityScanner:
         self._last_eth = eth
         if self.garch.high_vol(4.0):
             return None
+
         mispricing = 0.004 + random.gauss(0, 0.001)
         zscore_val = self.zscore.update('WETH_USDC', mispricing)
         if abs(zscore_val) < 0.5:
@@ -848,6 +849,25 @@ def menu_status():
     print(f"    RPC:       {C.DIM}{'Alchemy' if ALCH_ARB else 'public'}{C.RESET}")
     print(f"    Flashbots: {C.BGREEN if FB_SECRET else C.DIM}{'configured' if FB_SECRET else 'not set'}{C.RESET}")
     print(f"    Web3:      {C.BGREEN if WEB3_OK else C.RED}{'OK (v5 Termux-compat)' if WEB3_OK else 'not installed'}{C.RESET}")
+    print(f"  {C.BOLD}Configuration{C.RESET}")
+    print(f"    Wallet:     {C.CYAN}{(WALLET[:16]+'...' if WALLET else 'not set')}{C.RESET}")
+    print(f"    Contract:   {C.CYAN}{(CONTRACT[:16]+'...' if CONTRACT else 'not set')}{C.RESET}")
+    print(f"    Paymaster:  {C.CYAN}{(PAYMASTER[:16]+'...' if PAYMASTER else 'not set (optional)')}{C.RESET}")
+    print(f"    RPC (Arb):  {C.DIM}{'Alchemy' if ALCH_ARB else 'public endpoint'}{C.RESET}")
+    print(f"    Flashbots:  {C.BGREEN if FB_SECRET else C.DIM}{'configured' if FB_SECRET else 'not set'}{C.RESET}")
+    print(f"    Web3:       {C.BGREEN if WEB3_OK else C.RED}{'v5 (Termux-compat)' if WEB3_OK else 'not installed'}{C.RESET}")
+    print()
+    print(f"  {C.BOLD}Flash Protocols{C.RESET}")
+    protos = [('Aave V3',   '0.09% fee', 'ETH/ARB/OP/BASE/Polygon'),
+              ('Balancer V2','0% fee',    'Ethereum + Arbitrum'),
+              ('Morpho Blue','0% fee',    'Ethereum'),
+              ('Uniswap V3', '~0.01% fee','all chains')]
+    for name,fee,chains in protos:
+        print(f"    {C.CYAN}{name:<15}{C.RESET} {fee:<12} {C.DIM}{chains}{C.RESET}")
+    print()
+    print(f"  {C.BOLD}Zero-Gas Strategies{C.RESET}")
+    for i,s in enumerate(GAS_STRATEGIES):
+        print(f"    {C.CYAN}[{i+1}]{C.RESET} {s}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 def menu_config():
