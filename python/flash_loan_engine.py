@@ -217,7 +217,6 @@ def db_query(sql: str, params: tuple = ()) -> list:
 # ─────────────────────────────────────────────
 
 class EMAWeights:
-    """EMA pair weight tracker — alpha=0.15. Pairs finding opps rise, others decay."""
     ALPHA = 0.15
     def __init__(self):  self._w: Dict[str,float] = {}
     def update(self, pair: str, found: bool) -> float:
@@ -230,7 +229,6 @@ class EMAWeights:
 
 
 class ZScoreDetector:
-    """Z-score anomaly detection. Window=20, threshold=2.0σ."""
     WINDOW = 20; THRESHOLD = 2.0
     def __init__(self): self._h: Dict[str,deque] = {}
     def update(self, key: str, v: float) -> float:
@@ -246,10 +244,6 @@ class ZScoreDetector:
 
 
 class GARCH11:
-    """
-    GARCH(1,1): σ²_t = ω + α·ε²_{t-1} + β·σ²_{t-1}
-    Predicts next-period variance. Gates trading in extreme regimes.
-    """
     def __init__(self, omega=1e-6, alpha=0.15, beta=0.80):
         self.omega = omega; self.alpha = alpha; self.beta = beta
         self.sigma2 = omega / max(1 - alpha - beta, 1e-9)
@@ -263,10 +257,6 @@ class GARCH11:
 
 
 class KalmanPrice:
-    """
-    1-D Kalman Filter: removes noise from on-chain price feeds.
-    State [price, velocity] | no look-ahead bias.
-    """
     def __init__(self, q=0.001, r=0.5):
         self.x=0.0; self.v=0.0; self.P=[[1,0],[0,1]]; self.Q=q; self.R=r; self._init=False
     def update(self, obs: float) -> float:
@@ -285,10 +275,6 @@ class KalmanPrice:
 
 
 class OrnsteinUhlenbeck:
-    """
-    OU process: dX = θ(μ-X)dt + σdW
-    Estimates spread half-life and reversion probability for pair arb timing.
-    """
     def __init__(self, theta=0.7, mu=0.0, sigma=0.02):
         self.theta=theta; self.mu=mu; self.sigma=sigma; self.X=mu; self._obs: List[float]=[]
     def update(self, x: float):
@@ -311,11 +297,6 @@ class OrnsteinUhlenbeck:
 
 
 class KellyCriterion:
-    """
-    Half-Kelly with regime conditioning.
-    f* = (p·b - q)/b / 2, capped at 20%.
-    BULL=1.2x · NEUTRAL=1.0x · BEAR=0.5x
-    """
     REGIMES = {'BULL':1.2, 'NEUTRAL':1.0, 'BEAR':0.5}
     def fraction(self, win_p: float, win_loss: float, regime: str = 'NEUTRAL') -> float:
         p = min(max(win_p,0.01),0.99); b = max(win_loss,0.01); q = 1-p
@@ -324,10 +305,6 @@ class KellyCriterion:
 
 
 class NewtonRaphsonAMM:
-    """
-    Newton-Raphson exact AMM output: k=(x+Δx_f)(y-Δy)
-    5 iterations. More accurate than linear approx for large trades.
-    """
     def __init__(self, iters=5): self.iters=iters
     def out(self, rx, ry, ain, fee_bps=30) -> float:
         af = ain*(1-fee_bps/10000); k=rx*ry
@@ -341,10 +318,6 @@ class NewtonRaphsonAMM:
 
 
 class BellmanFordArb:
-    """
-    Bellman-Ford negative-cycle detection for triangular arbitrage.
-    Edge(i→j) = -log(rate). Negative cycle = profitable arb path.
-    """
     def find(self, prices: Dict[Tuple,float], tokens: List[str]) -> Optional[List[str]]:
         idx={t:i for i,t in enumerate(tokens)}; n=len(tokens)
         dist=[float('inf')]*n; pred=[-1]*n; dist[0]=0.0
@@ -362,10 +335,6 @@ class BellmanFordArb:
 
 
 class UCB1Bandit:
-    """
-    UCB1 Multi-Armed Bandit: score_i = mean_i + √(2·ln(N)/n_i)
-    Learns which gas strategy succeeds most. Self-adapts over time.
-    """
     def __init__(self, n: int):
         self.n=n; self.counts=[0]*n; self.rewards=[0.0]*n; self.N=0
     def choose(self) -> int:
@@ -386,10 +355,6 @@ class UCB1Bandit:
 
 
 class QLearning:
-    """
-    Q-Learning RL: state=(vol_hi,spread_wide,gas_hi) → 8 states, 7 actions.
-    Reward = net profit USD after gas. Epsilon-greedy with decay.
-    """
     NS=8; NA=7
     def __init__(self, alpha=0.1, gamma=0.95, eps=0.2):
         self.a=alpha; self.g=gamma; self.eps=eps
@@ -414,7 +379,6 @@ class QLearning:
 
 
 class FourierCycle:
-    """DFT dominant-frequency detector for cyclical price patterns."""
     def __init__(self): self.prices: List[float]=[]
     def add(self, p: float): self.prices.append(p); self.prices=self.prices[-256:]
     def period_s(self, rate=CYCLE_SEC) -> Optional[float]:
@@ -536,14 +500,12 @@ class OpportunityScanner:
         eth = self.feed.eth_price()
         self.fourier.add(eth)
         self._scan_n += 1
-
         if self._last_eth > 0:
             ret = (eth - self._last_eth) / self._last_eth
             vol = self.garch.update(ret)
         else:
             vol = 0.01
         self._last_eth = eth
-
         if self.garch.high_vol(4.0):
             return None
 
@@ -551,27 +513,22 @@ class OpportunityScanner:
         zscore_val = self.zscore.update('WETH_USDC', mispricing)
         if abs(zscore_val) < 0.5:
             return None
-
         loan_usdc = 100_000.0
         rx_uni    = 5_000_000.0; ry_uni = rx_uni / max(eth, 1)
         rx_su     = 4_980_000.0; ry_su  = rx_su  / max(eth*(1+mispricing), 1)
-
         out_weth  = self.nr.out(rx_uni, ry_uni, loan_usdc, 5)
         out_usdc  = self.nr.out(ry_su,  rx_su,  out_weth,  30)
         gross     = out_usdc - loan_usdc
         aave_fee  = loan_usdc * 0.0009
         profit    = gross - aave_fee
-
         if profit < MIN_PROFIT_USD:
             return None
-
         spread = profit / loan_usdc
         self.ou.update(spread)
         rev_p   = self.ou.reversion_prob(spread, 30)
         kf      = self.kelly.fraction(min(0.75, rev_p), profit/max(loan_usdc*0.001,0.01))
         sized   = min(loan_usdc * kf * 50, MAX_LOAN_USD)
         s_prof  = profit * sized / loan_usdc
-
         pair = 'USDC/WETH'
         self.ema.update(pair, True)
         db_exec("""
@@ -581,7 +538,6 @@ class OpportunityScanner:
              'CROSS_DEX_SPOT','arbitrum','uni_v3+sushi',
              round(s_prof,4),'pending',json.dumps({'spread':spread,'vol':vol}),
              datetime.now().isoformat()))
-
         return Opportunity(
             type='CROSS_DEX_SPOT',
             asset='0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8',
@@ -592,10 +548,9 @@ class OpportunityScanner:
         )
 
 # ─────────────────────────────────────────────
-#  GAS SUBMITTER (Flashbots PEG)
+#  GAS SUBMITTER
 # ─────────────────────────────────────────────
 class FlashbotsPEG:
-    """gasPrice=0 + block.coinbase.transfer(fee) pays builder from profit."""
     def submit(self, opp: Opportunity, eth_price: float) -> Optional[str]:
         if not (PRIV_KEY and CONTRACT and WEB3_OK and requests):
             return None
@@ -646,10 +601,6 @@ class GelatoSubmitter:
 #  AUTOMATION DAEMON
 # ─────────────────────────────────────────────
 class FlashDaemon:
-    """
-    Core automation loop. Matches jdl_engine.py AutomationScheduler pattern.
-    scan → filter → UCB1 gas select → submit → Q-learn → repeat
-    """
     def __init__(self):
         self.feed    = PriceFeed()
         self.scanner = OpportunityScanner(self.feed)
@@ -669,19 +620,16 @@ class FlashDaemon:
         eth_p   = self.feed.eth_price()
         gas_g   = self.feed.gas_gwei()
         gas_usd = self.feed.gas_usd()
-
         opp = self.scanner.scan()
         if not opp:
             if verbose:
                 print(f"  {C.DIM}[{ts}] #{self.cycle:04d} scanning — no edge detected  eth=${eth_p:,.0f}  gas={gas_g:.3f}gwei{C.RESET}")
             return
-
         print(f"  {C.BGREEN}[{ts}]{C.RESET} {C.BOLD}EDGE FOUND{C.RESET}"
               f"  profit={C.BYELLOW}${opp.profit_usd:.3f}{C.RESET}"
               f"  loan={C.BCYAN}${opp.loan_usd:,.0f}{C.RESET}"
               f"  vol={opp.vol*100:.2f}%"
               f"  kelly={opp.kelly_frac*100:.1f}%")
-
         arm      = self.bandit.choose()
         strategy = GAS_STRATEGIES[arm]
         hv = self.scanner.garch.high_vol()
@@ -689,9 +637,7 @@ class FlashDaemon:
         hg = gas_g > 1.0
         state = self.qlearn.encode(hv, ws, hg)
         self.qlearn.ls = state; self.qlearn.la = arm
-
         print(f"  {C.DIM}    strategy={strategy}  arm={arm}{C.RESET}")
-
         tx_hash = None
         try:
             if strategy == 'FLASHBOTS_PEG':
@@ -700,7 +646,6 @@ class FlashDaemon:
                 tx_hash = self.gelato.submit()
             else:
                 tx_hash = f'sim_{hashlib.md5(f"{time.time()}".encode()).hexdigest()[:16]}'
-
             net = RevenueTracker.log(
                 opp.type, strategy, opp.asset,
                 opp.loan_usd, opp.profit_usd, gas_usd,
@@ -710,12 +655,10 @@ class FlashDaemon:
             self.bandit.update(arm, reward)
             ns = self.qlearn.encode(self.scanner.garch.high_vol(), net>5.0, hg)
             self.qlearn.update(reward, ns)
-
             total = RevenueTracker.total()
             pct   = min(total/WITHDRAW_THRESH*100,100)
             bar   = int(pct/5)
             pbar  = f"[{'#'*bar}{'.'*(20-bar)}]"
-
             if tx_hash:
                 print(f"  {C.BGREEN}  ✓ submitted{C.RESET}  hash={C.DIM}{(tx_hash or '')[:18]}...{C.RESET}  net={C.BYELLOW}${net:.3f}{C.RESET}")
                 print(f"  {C.CYAN}  revenue {pbar} ${total:,.2f}/${WITHDRAW_THRESH:,.0f} ({pct:.1f}%){C.RESET}")
@@ -745,7 +688,7 @@ class FlashDaemon:
         self.running = False
 
 # ─────────────────────────────────────────────
-#  HEADER
+#  UI
 # ─────────────────────────────────────────────
 def print_header():
     total  = RevenueTracker.total()
@@ -777,9 +720,6 @@ def print_menu():
   {C.CYAN}[0]{C.RESET} Exit
 """)
 
-# ─────────────────────────────────────────────
-#  MENU FUNCTIONS
-# ─────────────────────────────────────────────
 async def menu_run_daemon():
     clear()
     print(f"\n{C.BOLD}{C.CYAN}  ─── AUTOMATION ENGINE ───{C.RESET}\n")
@@ -828,8 +768,8 @@ def menu_gas_strategies():
     clear()
     daemon = FlashDaemon()
     print(f"\n{C.BOLD}{C.CYAN}  ─── GAS STRATEGY STATUS ───{C.RESET}\n")
-    print(f"  {'#':<4} {'Strategy':<22} {'Tries':>6} {'Wins':>5} {'Avg $':>8}  {'UCB Score':>10}")
-    print(f"  {'─'*4} {'─'*22} {'─'*6} {'─'*5} {'─'*8}  {'─'*10}")
+    print(f"  {'#':<4} {'Strategy':<22} {'Tries':>6} {'Avg $':>8}  {'UCB Score':>10}")
+    print(f"  {'─'*4} {'─'*22} {'─'*6} {'─'*8}  {'─'*10}")
     N = max(daemon.bandit.N, 1)
     for i, name in enumerate(GAS_STRATEGIES):
         c = daemon.bandit.counts[i]; r = daemon.bandit.rewards[i]
@@ -837,7 +777,7 @@ def menu_gas_strategies():
         ucb = avg + math.sqrt(2*math.log(N)/max(c,1))
         best = " <" if i == daemon.bandit.best() else ""
         col  = C.BGREEN if best else C.RESET
-        print(f"  {C.CYAN}{i+1:<4}{C.RESET} {col}{name:<22}{C.RESET} {c:>6} {'-':>5} {avg:>+8.3f}  {ucb:>10.4f}{best}")
+        print(f"  {C.CYAN}{i+1:<4}{C.RESET} {col}{name:<22}{C.RESET} {c:>6} {avg:>+8.3f}  {ucb:>10.4f}{best}")
     print(f"\n  {C.DIM}UCB1: score = mean_reward + √(2·ln(N)/n)  Best arm marked <{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
@@ -855,8 +795,8 @@ def menu_revenue():
     print()
     rows = RevenueTracker.history(15)
     if rows:
-        print(f"  {'Time':<10} {'Strategy':<22} {'Loan$':>10} {'Profit$':>8} {'Net$':>8}  {'OK':<4}")
-        print(f"  {'─'*10} {'─'*22} {'─'*10} {'─'*8} {'─'*8}  {'─'*4}")
+        print(f"  {'Time':<10} {'Strategy':<22} {'Loan$':>10} {'Profit$':>8} {'Net$':>8}")
+        print(f"  {'─'*10} {'─'*22} {'─'*10} {'─'*8} {'─'*8}")
         for r in rows:
             ts = datetime.fromtimestamp(r[0]).strftime('%H:%M:%S') if r[0] else '-'
             ok = f"{C.BGREEN}✓{C.RESET}" if r[7] else f"{C.RED}✗{C.RESET}"
@@ -875,29 +815,21 @@ def menu_algorithms():
     print(f"    Gas:        {C.CYAN}{gas:.3f} gwei{C.RESET}")
     print(f"    Gas cost:   {C.DIM}${feed.gas_usd():.4f} USD (500k gas){C.RESET}")
     print()
-    print(f"  {C.BOLD}GARCH(1,1) Volatility{C.RESET}")
-    print(f"    σ²_t = ω + α·ε²_{{t-1}} + β·σ²_{{t-1}}")
+    print(f"  {C.BOLD}GARCH(1,1){C.RESET}   σ²_t = ω + α·ε²_{{t-1}} + β·σ²_{{t-1}}")
     print(f"    ω={g.omega:.1e}  α={g.alpha}  β={g.beta}")
     print(f"    1-step vol: {C.CYAN}{g.predict(1)*100:.4f}%{C.RESET}  high_vol: {C.RED if g.high_vol() else C.BGREEN}{g.high_vol()}{C.RESET}")
     print()
-    print(f"  {C.BOLD}Ornstein-Uhlenbeck Spread{C.RESET}")
     ou = OrnsteinUhlenbeck()
     [ou.update(0.004 + random.gauss(0,0.001)) for _ in range(30)]
-    print(f"    θ={ou.theta:.4f}  μ={ou.mu:.6f}  σ={ou.sigma:.4f}")
-    print(f"    half-life:  {C.CYAN}{ou.half_life():.1f}s{C.RESET}")
-    print(f"    rev_prob:   {C.CYAN}{ou.reversion_prob(0.005,60)*100:.1f}%{C.RESET} (60s horizon)")
+    print(f"  {C.BOLD}Ornstein-Uhlenbeck{C.RESET}   θ={ou.theta:.4f}  μ={ou.mu:.6f}")
+    print(f"    half-life: {C.CYAN}{ou.half_life():.1f}s{C.RESET}   rev_prob: {C.CYAN}{ou.reversion_prob(0.005,60)*100:.1f}%{C.RESET} (60s)")
     print()
-    print(f"  {C.BOLD}Kelly Criterion{C.RESET}")
     k = KellyCriterion()
-    print(f"    NEUTRAL f*= {C.CYAN}{k.fraction(0.65,2.5,'NEUTRAL')*100:.2f}%{C.RESET}")
-    print(f"    BULL    f*= {C.BGREEN}{k.fraction(0.65,2.5,'BULL')*100:.2f}%{C.RESET}")
-    print(f"    BEAR    f*= {C.RED}{k.fraction(0.65,2.5,'BEAR')*100:.2f}%{C.RESET}")
+    print(f"  {C.BOLD}Kelly Criterion{C.RESET}")
+    print(f"    BULL {C.BGREEN}{k.fraction(0.65,2.5,'BULL')*100:.2f}%{C.RESET}   NEUTRAL {C.CYAN}{k.fraction(0.65,2.5,'NEUTRAL')*100:.2f}%{C.RESET}   BEAR {C.RED}{k.fraction(0.65,2.5,'BEAR')*100:.2f}%{C.RESET}")
     print()
-    print(f"  {C.BOLD}Algorithms Active{C.RESET}")
-    print(f"    {C.BGREEN}✓{C.RESET} GARCH(1,1)  {C.BGREEN}✓{C.RESET} Kalman Filter    {C.BGREEN}✓{C.RESET} Ornstein-Uhlenbeck")
-    print(f"    {C.BGREEN}✓{C.RESET} UCB1 Bandit {C.BGREEN}✓{C.RESET} Q-Learning       {C.BGREEN}✓{C.RESET} Newton-Raphson AMM")
-    print(f"    {C.BGREEN}✓{C.RESET} Bellman-Ford {C.BGREEN}✓{C.RESET} Kelly Criterion  {C.BGREEN}✓{C.RESET} Fourier Cycle")
-    print(f"    {C.BGREEN}✓{C.RESET} EMA Weights {C.BGREEN}✓{C.RESET} Z-Score Detector")
+    print(f"  {C.BOLD}Active:{C.RESET} GARCH ✓  Kalman ✓  OU ✓  UCB1 ✓  Q-Learn ✓  Newton-Raphson ✓")
+    print(f"          Bellman-Ford ✓  Kelly ✓  Fourier ✓  EMA ✓  Z-Score ✓")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 def menu_status():
@@ -911,6 +843,12 @@ def menu_status():
     opps  = db_query('SELECT COUNT(*) FROM opportunities')[0][0]
     print(f"  Revenue:  {C.BGREEN}${total:.4f}{C.RESET}   Execs: {C.BYELLOW}{execs}{C.RESET}   Opps: {C.CYAN}{opps}{C.RESET}")
     print()
+    print(f"  {C.BOLD}Config{C.RESET}")
+    print(f"    Wallet:    {C.CYAN}{(WALLET[:16]+'...' if WALLET else 'not set')}{C.RESET}")
+    print(f"    Contract:  {C.CYAN}{(CONTRACT[:16]+'...' if CONTRACT else 'not set')}{C.RESET}")
+    print(f"    RPC:       {C.DIM}{'Alchemy' if ALCH_ARB else 'public'}{C.RESET}")
+    print(f"    Flashbots: {C.BGREEN if FB_SECRET else C.DIM}{'configured' if FB_SECRET else 'not set'}{C.RESET}")
+    print(f"    Web3:      {C.BGREEN if WEB3_OK else C.RED}{'OK (v5 Termux-compat)' if WEB3_OK else 'not installed'}{C.RESET}")
     print(f"  {C.BOLD}Configuration{C.RESET}")
     print(f"    Wallet:     {C.CYAN}{(WALLET[:16]+'...' if WALLET else 'not set')}{C.RESET}")
     print(f"    Contract:   {C.CYAN}{(CONTRACT[:16]+'...' if CONTRACT else 'not set')}{C.RESET}")
@@ -936,53 +874,43 @@ def menu_config():
     clear()
     print(f"\n{C.BOLD}{C.CYAN}  ─── CONFIGURATION ───{C.RESET}\n")
     env_path = os.path.expanduser('~/jdl/.env')
-    env_exists = os.path.exists(env_path)
-    print(f"  .env file: {C.BGREEN if env_exists else C.RED}{env_path}{C.RESET}")
-    print()
+    print(f"  .env: {C.BGREEN if os.path.exists(env_path) else C.RED}{env_path}{C.RESET}\n")
     fields = [
-        ('WALLET_ADDRESS',       WALLET,     'Your wallet address'),
-        ('PRIVATE_KEY',          '***' if PRIV_KEY else '', 'Private key (keep secret)'),
-        ('ALCHEMY_ARB_KEY',      '***' if ALCH_ARB else '', 'Alchemy Arbitrum key'),
-        ('FLASHBOTS_SECRET',     '***' if FB_SECRET else '', 'Flashbots signing key'),
-        ('FLASH_CONTRACT_ADDRESS',CONTRACT,   'Deployed FlashZeroGas.sol'),
-        ('PAYMASTER_ADDRESS',    PAYMASTER,   'Deployed ProfitPaymaster.sol (optional)'),
-        ('GELATO_API_KEY',       '***' if GELATO_KEY else '', 'Gelato relay key (optional)'),
-        ('BICONOMY_API_KEY',     '***' if BICONOMY_K else '', 'Biconomy key (optional)'),
+        ('WALLET_ADDRESS',        WALLET,      'Wallet address'),
+        ('PRIVATE_KEY',           '***' if PRIV_KEY else '', 'Private key'),
+        ('ALCHEMY_ARB_KEY',       '***' if ALCH_ARB else '', 'Alchemy Arbitrum key'),
+        ('FLASHBOTS_SECRET',      '***' if FB_SECRET else '', 'Flashbots signing key'),
+        ('FLASH_CONTRACT_ADDRESS', CONTRACT,   'Deployed FlashZeroGas.sol'),
+        ('PAYMASTER_ADDRESS',     PAYMASTER,   'ProfitPaymaster.sol (optional)'),
+        ('GELATO_API_KEY',        '***' if GELATO_KEY else '', 'Gelato key (optional)'),
     ]
-    print(f"  {'Variable':<30} {'Set?':<6} {'Description'}")
-    print(f"  {'─'*30} {'─'*6} {'─'*30}")
+    print(f"  {'Variable':<30} {'Set?':<5} {'Description'}")
+    print(f"  {'─'*30} {'─'*5} {'─'*28}")
     for var,val,desc in fields:
-        ok = bool(val and val != '')
-        col= C.BGREEN if ok else C.YELLOW
-        sym= f"{col}{'YES' if ok else 'NO '}{C.RESET}"
-        print(f"  {C.CYAN}{var:<30}{C.RESET} {sym:<6} {C.DIM}{desc}{C.RESET}")
-    print(f"\n  Edit {C.CYAN}~/jdl/.env{C.RESET} to configure.")
-    print(f"  See {C.DIM}.env.template{C.RESET} for all options.")
+        ok = bool(val)
+        sym = f"{C.BGREEN}YES{C.RESET}" if ok else f"{C.YELLOW}NO {C.RESET}"
+        print(f"  {C.CYAN}{var:<30}{C.RESET} {sym}  {C.DIM}{desc}{C.RESET}")
+    print(f"\n  Edit: {C.CYAN}nano ~/jdl/.env{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 async def menu_tests():
     clear()
     print(f"\n{C.BOLD}{C.CYAN}  ─── RUNNING TESTS ───{C.RESET}\n")
-    from test_flash_engine import run_all_tests
-    await run_all_tests(verbose=True)
+    try:
+        from test_flash_engine import run_all_tests
+        await run_all_tests(verbose=True)
+    except ImportError:
+        print(f"  {C.RED}test_flash_engine.py not found in python/ directory.{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
-# ─────────────────────────────────────────────
-#  MAIN
-# ─────────────────────────────────────────────
 async def main():
     init_db()
     while True:
-        clear()
-        banner()
-        print_header()
-        print_menu()
+        clear(); banner(); print_header(); print_menu()
         try:
             choice = input("  Select option > ").strip()
         except (KeyboardInterrupt, EOFError):
-            print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n")
-            break
-
+            print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
         if   choice == '1': await menu_run_daemon()
         elif choice == '2': await menu_scan_now()
         elif choice == '3': menu_gas_strategies()
@@ -990,18 +918,9 @@ async def main():
         elif choice == '5': menu_algorithms()
         elif choice == '6': menu_status()
         elif choice == '7': menu_config()
-        elif choice == '8':
-            try:
-                await menu_tests()
-            except ImportError:
-                print(f"  {C.RED}test_flash_engine.py not found.{C.RESET}")
-                input(f"  {C.DIM}Press ENTER…{C.RESET}")
-        elif choice == '0':
-            print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n")
-            break
-        else:
-            print(f"  {C.RED}Invalid option.{C.RESET}")
-            await asyncio.sleep(0.4)
+        elif choice == '8': await menu_tests()
+        elif choice == '0': print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
+        else: print(f"  {C.RED}Invalid option.{C.RESET}"); await asyncio.sleep(0.4)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.WARNING, format='%(levelname)s %(message)s')
