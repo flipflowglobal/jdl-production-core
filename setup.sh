@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# Flash Loan Zero-Gas Engine — One-Command Setup
-# Usage: bash setup.sh         (install)
-#        bash setup.sh run     (install + launch engine)
-#        bash setup.sh test    (install + run tests)
-
+# ═══════════════════════════════════════════════════════════
+# FLASH LOAN ZERO-GAS ENGINE — SETUP
+# Supports: Ubuntu/Debian · Termux (Android) · UserLAnd
+# Usage:
+#   bash setup.sh          — install only
+#   bash setup.sh run      — install + launch engine
+#   bash setup.sh test     — install + run 56-test suite
+#   bash setup.sh termux   — Termux-specific guided install
+# ═══════════════════════════════════════════════════════════
 set -e
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 BOLD='\033[1m'
+DIM='\033[2m'
 RESET='\033[0m'
 
 echo -e "${CYAN}${BOLD}"
@@ -21,7 +27,7 @@ cat << 'BANNER'
  ██╔══╝  ██║     ██╔══██║╚════██║██╔══██║
  ██║     ███████╗██║  ██║███████║██║  ██║
  ╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
-  ZERO-GAS LOAN ENGINE  ·  SETUP
+  ZERO-GAS FLASH LOAN ENGINE  ·  SETUP v2
 BANNER
 echo -e "${RESET}"
 
@@ -31,77 +37,160 @@ ENV_DIR="$HOME/jdl"
 ENV_FILE="$ENV_DIR/.env"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-step() { echo -e "${CYAN}▶ $1${RESET}"; }
-ok()   { echo -e "${GREEN}✓ $1${RESET}"; }
-warn() { echo -e "${YELLOW}⚠ $1${RESET}"; }
-fail() { echo -e "${RED}✗ $1${RESET}"; exit 1; }
+step()  { echo -e "${CYAN}▶ $1${RESET}"; }
+ok()    { echo -e "${GREEN}✓ $1${RESET}"; }
+warn()  { echo -e "${YELLOW}⚠ $1${RESET}"; }
+fail()  { echo -e "${RED}✗ $1${RESET}"; exit 1; }
+info()  { echo -e "${DIM}  $1${RESET}"; }
 
-# ── 1. Python check ──────────────────────────────────────────
-step "Checking Python version..."
-if command -v python3 &>/dev/null; then
-  PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-  PY_MAJOR=$(echo $PY_VER | cut -d. -f1)
-  PY_MINOR=$(echo $PY_VER | cut -d. -f2)
-  if [ "$PY_MAJOR" -ge 3 ] && [ "$PY_MINOR" -ge 10 ]; then
-    ok "Python $PY_VER found"
-  else
-    fail "Python 3.10+ required, found $PY_VER. Install from python.org"
-  fi
-else
-  fail "python3 not found. Install Python 3.10+ first."
+# ── Detect environment ───────────────────────────────────────
+IS_TERMUX=0
+IS_USERLAND=0
+if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; then
+    IS_TERMUX=1
+elif grep -qi 'userland\|android' /proc/version 2>/dev/null; then
+    IS_USERLAND=1
 fi
 
-# ── 2. Create virtual environment ────────────────────────────
+if [ "$IS_TERMUX" = "1" ]; then
+    echo -e "${MAGENTA}${BOLD}  Platform: Termux (Android)${RESET}"
+elif [ "$IS_USERLAND" = "1" ]; then
+    echo -e "${MAGENTA}${BOLD}  Platform: UserLAnd (Android)${RESET}"
+else
+    echo -e "${MAGENTA}${BOLD}  Platform: Linux/Ubuntu${RESET}"
+fi
+echo
+
+# ── Termux pre-flight: ensure required packages installed ────
+if [ "$IS_TERMUX" = "1" ]; then
+    step "Checking Termux packages..."
+    MISSING_PKGS=""
+    for pkg in python git openssl libffi; do
+        if ! pkg list-installed 2>/dev/null | grep -q "^$pkg"; then
+            MISSING_PKGS="$MISSING_PKGS $pkg"
+        fi
+    done
+    if [ -n "$MISSING_PKGS" ]; then
+        warn "Missing Termux packages:$MISSING_PKGS"
+        echo -e "  ${YELLOW}Installing now with pkg...${RESET}"
+        pkg install -y $MISSING_PKGS
+    fi
+    ok "Termux packages ready"
+fi
+
+# ── 1. Python check ──────────────────────────────────────────
+step "Checking Python..."
+if command -v python3 &>/dev/null; then
+    PYTHON=python3
+elif command -v python &>/dev/null; then
+    PYTHON=python
+else
+    if [ "$IS_TERMUX" = "1" ]; then
+        fail "Python not found. Run: pkg install python"
+    else
+        fail "Python not found. Run: sudo apt install python3 python3-venv"
+    fi
+fi
+
+PY_VER=$($PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+PY_MAJOR=$(echo $PY_VER | cut -d. -f1)
+PY_MINOR=$(echo $PY_VER | cut -d. -f2)
+if [ "$PY_MAJOR" -ge 3 ] && [ "$PY_MINOR" -ge 8 ]; then
+    ok "Python $PY_VER"
+else
+    fail "Python 3.8+ required (found $PY_VER). On Termux: pkg install python"
+fi
+
+# ── 2. Virtual environment ───────────────────────────────────
 step "Setting up virtual environment at $VENV_DIR..."
 if [ ! -d "$VENV_DIR" ]; then
-  python3 -m venv "$VENV_DIR"
-  ok "Virtual environment created"
+    # Termux sometimes needs --without-pip first, then we add pip manually
+    if [ "$IS_TERMUX" = "1" ]; then
+        $PYTHON -m venv "$VENV_DIR" 2>/dev/null || \
+        $PYTHON -m venv "$VENV_DIR" --without-pip 2>/dev/null || \
+        fail "venv creation failed. Try: pkg reinstall python"
+    else
+        $PYTHON -m venv "$VENV_DIR" || \
+        { warn "venv failed, trying with --without-pip"
+          $PYTHON -m venv "$VENV_DIR" --without-pip; }
+    fi
+    ok "Virtual environment created"
 else
-  ok "Virtual environment already exists"
+    ok "Virtual environment already exists"
 fi
 
 source "$VENV_DIR/bin/activate"
 
-# ── 3. Install dependencies ───────────────────────────────────
-step "Installing Python dependencies..."
-pip install --quiet --upgrade pip
-pip install --quiet -r "$SCRIPT_DIR/python/requirements_flash.txt"
-ok "Dependencies installed"
+# Ensure pip is available inside venv
+if ! command -v pip &>/dev/null; then
+    step "Bootstrapping pip inside venv..."
+    curl -sS https://bootstrap.pypa.io/get-pip.py | $PYTHON
+    ok "pip bootstrapped"
+fi
 
-# ── 4. Create data directory ──────────────────────────────────
+# ── 3. Install dependencies ───────────────────────────────────
+step "Installing Python dependencies (no Rust required)..."
+info "Using web3==5.31.4 — pure Python, zero Rust/Cargo dependencies"
+info "Safe for Termux mobile data (no crates.io downloads)"
+
+PIP_FLAGS="--quiet"
+[ "$IS_TERMUX" = "1" ] && PIP_FLAGS="--quiet --no-cache-dir"
+
+pip install $PIP_FLAGS --upgrade pip
+pip install $PIP_FLAGS -r "$SCRIPT_DIR/python/requirements_flash.txt"
+ok "Dependencies installed (web3 v5, aiohttp, dotenv, hexbytes)"
+
+# ── 4. Data directory ────────────────────────────────────────
 step "Creating data directory at $DATA_DIR..."
 mkdir -p "$DATA_DIR"
 ok "Data directory ready"
 
 # ── 5. Environment file ───────────────────────────────────────
-step "Setting up environment file..."
+step "Setting up environment config at $ENV_FILE..."
 mkdir -p "$ENV_DIR"
 if [ ! -f "$ENV_FILE" ]; then
-  cp "$SCRIPT_DIR/.env.template" "$ENV_FILE"
-  warn "Created $ENV_FILE from template — EDIT THIS FILE before running!"
-  echo -e "  ${YELLOW}Required: PRIVATE_KEY, RPC_URL, FLASHBOTS_AUTH_KEY${RESET}"
-  echo -e "  ${YELLOW}Required after deploy: FLASH_CONTRACT_ADDRESS${RESET}"
+    cp "$SCRIPT_DIR/.env.template" "$ENV_FILE"
+    warn "Created $ENV_FILE from template"
+    echo -e "  ${YELLOW}Edit it now:  nano $ENV_FILE${RESET}"
+    echo -e "  ${YELLOW}Required:     PRIVATE_KEY  ALCHEMY_ARB_KEY${RESET}"
+    echo -e "  ${YELLOW}Optional:     FLASH_CONTRACT_ADDRESS (scan mode works without it)${RESET}"
 else
-  ok "$ENV_FILE already exists"
+    ok "$ENV_FILE already exists"
 fi
 
-# ── 6. Done ───────────────────────────────────────────────────
+# ── 6. Summary ───────────────────────────────────────────────
 echo
-echo -e "${GREEN}${BOLD}╔══════════════════════════════════════╗${RESET}"
-echo -e "${GREEN}${BOLD}║     Setup Complete!                  ║${RESET}"
-echo -e "${GREEN}${BOLD}╚══════════════════════════════════════╝${RESET}"
+echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════╗${RESET}"
+echo -e "${GREEN}${BOLD}║   Setup Complete!  Flash Loan Engine Ready       ║${RESET}"
+echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════╝${RESET}"
+echo
+echo -e "  ${BOLD}Flash Loan Sources (pre-deployed, no contract needed):${RESET}"
+echo -e "  ${GREEN}●${RESET} Balancer V2     0xBA12...2C8   ${GREEN}0% fee${RESET}"
+echo -e "  ${CYAN}●${RESET} Aave V3         0x794a...4aD   0.09% fee"
+echo -e "  ${CYAN}●${RESET} Radiant Capital 0xF4B1...9E1   0.09% fee"
+echo -e "  ${DIM}●${RESET} Uniswap V3      multiple pools  0.05–0.30% fee"
 echo
 echo -e "  ${BOLD}Next steps:${RESET}"
-echo -e "  1. Edit your config: ${CYAN}nano $ENV_FILE${RESET}"
-echo -e "  2. Deploy contracts: see ${CYAN}README_FLASH.md${RESET}"
-echo -e "  3. Start engine:     ${CYAN}bash setup.sh run${RESET}"
+echo -e "  1. ${CYAN}nano $ENV_FILE${RESET}      — add PRIVATE_KEY + ALCHEMY_ARB_KEY"
+echo -e "  2. ${CYAN}bash setup.sh run${RESET}  — launch engine"
+echo -e "  3. Press ${BOLD}[9]${RESET} in the menu  — discover live protocol liquidity"
+echo -e "  4. Press ${BOLD}[8]${RESET} in the menu  — run tests (56/56 should pass)"
 echo
 
+if [ "$IS_TERMUX" = "1" ]; then
+    echo -e "  ${MAGENTA}${BOLD}Termux tips:${RESET}"
+    echo -e "  ${DIM}• Keep screen on while running: termux-wake-lock${RESET}"
+    echo -e "  ${DIM}• Run in background:  nohup bash setup.sh run &${RESET}"
+    echo -e "  ${DIM}• View logs:          tail -f ~/.flash_loan_engine/flash.log${RESET}"
+    echo -e "  ${DIM}• Stop engine:        pkill -f flash_loan_engine${RESET}"
+    echo
+fi
+
 # ── Optional: run or test ─────────────────────────────────────
-if [ "$1" = "run" ]; then
-  echo -e "${CYAN}Launching Flash Loan Engine...${RESET}"
-  python3 "$SCRIPT_DIR/python/flash_loan_engine.py"
+if [ "$1" = "run" ] || [ "$1" = "termux" ]; then
+    echo -e "${CYAN}Launching Flash Loan Engine...${RESET}"
+    python3 "$SCRIPT_DIR/python/flash_loan_engine.py"
 elif [ "$1" = "test" ]; then
-  echo -e "${CYAN}Running test suite...${RESET}"
-  python3 "$SCRIPT_DIR/python/test_flash_engine.py"
+    echo -e "${CYAN}Running test suite (expect 56/56)...${RESET}"
+    python3 "$SCRIPT_DIR/python/test_flash_engine.py"
 fi
