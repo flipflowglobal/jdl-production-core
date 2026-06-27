@@ -43,3 +43,19 @@ docker compose up       # or systemd for production
 ## License
 
 Proprietary — Copyright © 2026 Darcel King. All rights reserved.
+
+---
+
+### Revenue Tracking & Monitoring
+
+This project integrates the Omaga Revenue System for on-chain revenue tracking,
+RPC health monitoring, and reconciliation reporting.
+
+**Key modules:**
+- `revenue_system/revenue_recording.py` — Record flash arbitrage trades to SQLite
+- `revenue_system/chain_monitor_fixed.py` — RPC health daemon (6 chains)
+- `revenue_system/revenue_reconciliation.py` — On-chain balance verification
+- `database/revenue_schema.sql` — Database schema (7 tables, auto-aggregation triggers)
+- `scripts/deploy_termux.sh` — Universal Termux deployment script
+
+See `docs/README_REVENUE_SYSTEM.md` for full documentation.
