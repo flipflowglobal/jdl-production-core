@@ -10,3 +10,5 @@ data/
 .idea/
 *.swp
 .DS_Store
+*.db
+logs/

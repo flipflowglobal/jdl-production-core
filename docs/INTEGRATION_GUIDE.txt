@@ -1,0 +1,362 @@
+════════════════════════════════════════════════════════════════════════════
+  REVENUE SYSTEM INTEGRATION GUIDE
+  For: D.L, Aureon, FlipFlow, NEXUS-ARB on Termux/Ubuntu
+════════════════════════════════════════════════════════════════════════════
+
+WHAT YOU NOW HAVE
+─────────────────────────────────────────────────────────────────────────────
+
+[1] revenue_schema.sql
+    - Complete database schema with triggers & views
+    - Tables: flash_trades, withdrawals, revenue_summary, reconciliation_log, chain_health, rpc_diagnostics
+    - Auto-aggregates revenue via triggers
+    - Ready for SQLite3
+
+[2] revenue_reconciliation.py
+    - Queries on-chain contract balances
+    - Compares to .db withdrawal records
+    - Detects missing/stuck funds
+    - Generates reports (JSON + TXT)
+    - Web3.py integration for all 6 chains
+
+[3] chain_monitor_fixed.py
+    - FIXED: No more silent exceptions
+    - Logs ALL RPC failures to database
+    - Primary + backup RPC support
+    - Health checks: block number, gas price, latency
+    - Optional daemon mode (continuous background)
+
+[4] deploy_revenue_system.sh
+    - Auto-detects your projects (dl.2, aureon, flipflow, nexus-arb)
+    - Initializes schema in all .db files
+    - Copies scripts to each project
+    - Creates launcher scripts for convenience
+    - Generates quick start guide
+
+[5] Quick start guide (auto-generated)
+
+════════════════════════════════════════════════════════════════════════════
+
+DEPLOYMENT TO TERMUX
+─────────────────────────────────────────────────────────────────────────────
+
+STEP 1: Copy all files to your Termux home
+
+  # If you have GitHub access:
+  cd ~
+  git clone https://github.com/flipflowglobal/revenue-system.git
+  cd revenue-system
+  
+  # OR manually copy:
+  # Copy revenue_schema.sql → ~/
+  # Copy revenue_reconciliation.py → ~/
+  # Copy chain_monitor_fixed.py → ~/
+  # Copy deploy_revenue_system.sh → ~/
+
+STEP 2: Run deployment script
+
+  cd ~
+  bash deploy_revenue_system.sh
+  
+  # This will:
+  # - Find all your projects (dl.2, aureon, etc.)
+  # - Initialize schema in all .db files
+  # - Copy monitoring scripts
+  # - Create launcher scripts
+
+STEP 3: Configure contract addresses
+
+  nano ~/revenue_system.conf
+  
+  # Find and update:
+  CONTRACT_ARBITRUM="0xYourAureonPayProcessorAddress"
+  CONTRACT_ETHEREUM="0x..."
+  CONTRACT_OPTIMISM="0x..."
+  CONTRACT_BASE="0x..."
+  CONTRACT_POLYGON="0x..."
+  CONTRACT_BSC="0x..."
+  
+  # Save: Ctrl+O, Enter, Ctrl+X
+
+STEP 4: Verify deployment
+
+  # Test chain monitor (should show all chains healthy)
+  cd ~/dl.2
+  python3 scripts/chain_monitor.py data/aureon.db
+  
+  # Test reconciliation (should show contract balances)
+  cd ~/dl.2
+  python3 scripts/revenue_reconciliation.py data/aureon.db
+
+STEP 5: Integrate with your bot
+
+  In your main arbitrage loop (aureon_launch.sh or similar), add:
+  
+  python3 ~/dl.2/scripts/chain_monitor.py ~/dl.2/data/aureon.db --daemon &
+  
+  This starts continuous monitoring in background.
+
+════════════════════════════════════════════════════════════════════════════
+
+INTEGRATION WITH EXISTING BOT CODE
+─────────────────────────────────────────────────────────────────────────────
+
+ADD TO: ~/dl.2/orchestrate_aurora.py (or your main Python bot)
+
+──────────────────────────────────────────────────────────────────────────
+
+import sqlite3
+from datetime import datetime
+
+def record_flash_arbitrage(db_path, trade_data):
+    """
+    Record flash loan arbitrage execution to .db
+    
+    trade_data = {
+        'project': 'Aureon',
+        'chain': 'arbitrum',
+        'asset': 'USDC',
+        'amount_borrowed': 1000.0,
+        'fee_paid': 5.0,
+        'gross_profit': 8.5,
+        'gas_cost': 0.50,
+        'net_profit': 8.0,
+        'tx_hash': '0x...',
+        'contract_address': '0xAureonPayProcessor',
+        'initiator': '0xYourWallet'
+    }
+    """
+    
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    
+    try:
+        c.execute("""
+            INSERT INTO flash_trades
+            (project, chain, asset_borrowed, amount_borrowed, fee_paid,
+             gross_profit, gas_cost, net_profit, tx_hash, 
+             contract_address, initiator_address, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'success')
+        """, (
+            trade_data['project'],
+            trade_data['chain'],
+            trade_data['asset'],
+            trade_data['amount_borrowed'],
+            trade_data['fee_paid'],
+            trade_data['gross_profit'],
+            trade_data['gas_cost'],
+            trade_data['net_profit'],
+            trade_data['tx_hash'],
+            trade_data['contract_address'],
+            trade_data['initiator'],
+        ))
+        
+        conn.commit()
+        print(f"✓ Recorded: {trade_data['tx_hash'][:10]}... | Profit: ${trade_data['net_profit']:.2f}")
+        
+    except Exception as e:
+        print(f"✗ Failed to record trade: {e}")
+        # Log error but don't crash the arbitrage loop
+    
+    finally:
+        conn.close()
+
+
+def record_withdrawal(db_path, withdrawal_data):
+    """
+    Record profit withdrawal from contract to wallet
+    
+    withdrawal_data = {
+        'project': 'Aureon',
+        'chain': 'arbitrum',
+        'token': 'USDC',
+        'amount': 125.50,
+        'from_contract': '0xAureonPayProcessor',
+        'to_address': '0xYourWallet',
+        'tx_hash': '0x...',
+        'gas_cost': 1.25
+    }
+    """
+    
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    
+    try:
+        c.execute("""
+            INSERT INTO withdrawals
+            (project, chain, token, amount, from_contract, to_address, tx_hash, gas_cost, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'success')
+        """, (
+            withdrawal_data['project'],
+            withdrawal_data['chain'],
+            withdrawal_data['token'],
+            withdrawal_data['amount'],
+            withdrawal_data['from_contract'],
+            withdrawal_data['to_address'],
+            withdrawal_data['tx_hash'],
+            withdrawal_data.get('gas_cost', 0)
+        ))
+        
+        conn.commit()
+        print(f"✓ Recorded withdrawal: {withdrawal_data['amount']} {withdrawal_data['token']}")
+        
+    except Exception as e:
+        print(f"✗ Failed to record withdrawal: {e}")
+    
+    finally:
+        conn.close()
+
+
+# IN YOUR MAIN ARBITRAGE LOOP:
+
+if __name__ == '__main__':
+    
+    db_path = '~/dl.2/data/aureon.db'
+    
+    # After executing flash arbitrage via Web3:
+    tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+    gas_spent = tx_receipt['gasUsed'] * gas_price_gwei * 1e-9
+    
+    trade_record = {
+        'project': 'Aureon',
+        'chain': 'arbitrum',
+        'asset': 'USDC',
+        'amount_borrowed': 1000.0,
+        'fee_paid': aave_fee,
+        'gross_profit': profit_amount,
+        'gas_cost': gas_spent,
+        'net_profit': profit_amount - gas_spent,
+        'tx_hash': tx_hash,
+        'contract_address': aureon_processor_addr,
+        'initiator': owner_wallet
+    }
+    
+    record_flash_arbitrage(db_path, trade_record)
+
+──────────────────────────────────────────────────────────────────────────
+
+════════════════════════════════════════════════════════════════════════════
+
+DEPLOYMENT TO UBUNTU (UserLAnd)
+─────────────────────────────────────────────────────────────────────────────
+
+Same as Termux, but in UserLAnd terminal:
+
+  cd ~
+  bash deploy_revenue_system.sh
+
+Everything auto-detects and initializes.
+
+════════════════════════════════════════════════════════════════════════════
+
+QUICK REFERENCE: COMMON COMMANDS
+─────────────────────────────────────────────────────────────────────────────
+
+# One-time health check
+cd ~/dl.2
+python3 scripts/chain_monitor.py data/aureon.db
+
+# Continuous monitoring (background daemon)
+cd ~/dl.2
+python3 scripts/chain_monitor.py data/aureon.db --daemon --interval 60
+
+# Run reconciliation (compare on-chain vs .db)
+cd ~/dl.2
+python3 scripts/revenue_reconciliation.py data/aureon.db
+
+# View results
+cd ~/dl.2
+cat *reconciliation_report.txt
+
+# Query database directly
+sqlite3 ~/dl.2/data/aureon.db "SELECT * FROM vw_profit_by_chain;"
+
+# Check if schema is initialized
+sqlite3 ~/dl.2/data/aureon.db ".tables"
+
+════════════════════════════════════════════════════════════════════════════
+
+TROUBLESHOOTING
+─────────────────────────────────────────────────────────────────────────────
+
+Q: "ModuleNotFoundError: No module named 'web3'"
+A: Install dependencies:
+   pip install web3 requests
+
+Q: "sqlite3.OperationalError: no such table: flash_trades"
+A: Schema not initialized. Run:
+   bash deploy_revenue_system.sh
+
+Q: "RPC connection timeout"
+A: Check internet. Script auto-tries backup RPC. Monitor logs:
+   tail -f ~/dl.2/logs/chain_monitor.log
+
+Q: Revenue not showing in .db
+A: Add record_flash_arbitrage() call after each execution
+
+Q: "Contract address not set"
+A: Edit ~/revenue_system.conf and set CONTRACT_* addresses
+
+════════════════════════════════════════════════════════════════════════════
+
+FILES LOCATIONS (after deployment)
+─────────────────────────────────────────────────────────────────────────────
+
+Database Schema:
+  ~/revenue_schema.sql  (original template)
+  ~/dl.2/data/aureon.db (initialized with schema)
+  ~/aureon/data/aureon.db
+  ~/flipflow/data/flipflow.db
+  ~/nexus-arb/data/nexus.db
+
+Python Scripts:
+  ~/dl.2/scripts/revenue_reconciliation.py
+  ~/dl.2/scripts/chain_monitor.py
+  ~/aureon/scripts/revenue_reconciliation.py
+  ~/aureon/scripts/chain_monitor.py
+  (etc for each project)
+
+Launcher Scripts:
+  ~/dl.2/reconcile_revenue.sh
+  ~/dl.2/monitor_chains.sh
+  ~/dl.2/monitor_chains_daemon.sh
+  (etc for each project)
+
+Logs:
+  ~/dl.2/logs/chain_monitor.log (if daemon running)
+  ~/dl.2/chain_monitor.log (if running once)
+  *reconciliation_report.txt
+  *reconciliation.json
+
+Configuration:
+  ~/revenue_system.conf (main config with contract addresses)
+
+════════════════════════════════════════════════════════════════════════════
+
+WHAT CHANGED FROM PREVIOUS
+─────────────────────────────────────────────────────────────────────────────
+
+BEFORE:
+  ✗ Chain monitor silently failed with "NO DATA"
+  ✗ Revenue not tracked in .db
+  ✗ Profit scattered across wallets, unreconciled
+  ✗ No way to find stuck funds in contracts
+  ✗ Each project managed separately
+
+AFTER:
+  ✓ All exceptions logged to rpc_diagnostics table
+  ✓ Flash trades auto-recorded (if you call function)
+  ✓ Revenue auto-aggregated via triggers
+  ✓ Reconciliation finds discrepancies (on-chain vs .db)
+  ✓ Unified monitoring across all projects
+  ✓ Backup RPC support
+  ✓ Daemon mode for continuous monitoring
+
+════════════════════════════════════════════════════════════════════════════
+
+NEXT: Run the deployment script!
+
+  cd ~
+  bash deploy_revenue_system.sh
+
+════════════════════════════════════════════════════════════════════════════
