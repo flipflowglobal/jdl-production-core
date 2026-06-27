@@ -65,7 +65,7 @@ echo
 if [ "$IS_TERMUX" = "1" ]; then
     step "Checking Termux packages..."
     MISSING_PKGS=""
-    for pkg in python git openssl libffi; do
+    for pkg in python git openssl libffi clang make; do
         if ! pkg list-installed 2>/dev/null | grep -q "^$pkg"; then
             MISSING_PKGS="$MISSING_PKGS $pkg"
         fi
@@ -75,6 +75,9 @@ if [ "$IS_TERMUX" = "1" ]; then
         echo -e "  ${YELLOW}Installing now with pkg...${RESET}"
         pkg install -y $MISSING_PKGS
     fi
+    # python-rpds-py: pre-compiled rpds-py (web3 6.x transitive dep via jsonschema)
+    # so pip doesn't need to build it from source (avoids Rust requirement on Android)
+    pkg install -y python-rpds-py 2>/dev/null || true
     ok "Termux packages ready"
 fi
 
@@ -103,20 +106,31 @@ fi
 
 # ── 2. Virtual environment ───────────────────────────────────
 step "Setting up virtual environment at $VENV_DIR..."
-if [ ! -d "$VENV_DIR" ]; then
-    # Termux sometimes needs --without-pip first, then we add pip manually
-    if [ "$IS_TERMUX" = "1" ]; then
-        $PYTHON -m venv "$VENV_DIR" 2>/dev/null || \
-        $PYTHON -m venv "$VENV_DIR" --without-pip 2>/dev/null || \
+if [ "$IS_TERMUX" = "1" ]; then
+    # --system-site-packages lets the venv see pkg-installed packages
+    # (e.g. python-rpds-py) so pip doesn't build them from source on Android.
+    EXISTING_SYSPKGS=0
+    if [ -d "$VENV_DIR" ]; then
+        EXISTING_SYSPKGS=$(grep -ic "include-system-site-packages = true" "$VENV_DIR/pyvenv.cfg" 2>/dev/null || echo 0)
+    fi
+    if [ ! -d "$VENV_DIR" ] || [ "$EXISTING_SYSPKGS" -eq 0 ]; then
+        [ -d "$VENV_DIR" ] && { warn "Recreating venv with --system-site-packages for Termux..."; rm -rf "$VENV_DIR"; }
+        $PYTHON -m venv --system-site-packages "$VENV_DIR" 2>/dev/null || \
+        $PYTHON -m venv --system-site-packages "$VENV_DIR" --without-pip 2>/dev/null || \
         fail "venv creation failed. Try: pkg reinstall python"
+        ok "Virtual environment created"
     else
+        ok "Virtual environment already exists"
+    fi
+else
+    if [ ! -d "$VENV_DIR" ]; then
         $PYTHON -m venv "$VENV_DIR" || \
         { warn "venv failed, trying with --without-pip"
           $PYTHON -m venv "$VENV_DIR" --without-pip; }
+        ok "Virtual environment created"
+    else
+        ok "Virtual environment already exists"
     fi
-    ok "Virtual environment created"
-else
-    ok "Virtual environment already exists"
 fi
 
 source "$VENV_DIR/bin/activate"
@@ -129,16 +143,15 @@ if ! command -v pip &>/dev/null; then
 fi
 
 # ── 3. Install dependencies ───────────────────────────────────
-step "Installing Python dependencies (no Rust required)..."
-info "Using web3==5.31.4 — pure Python, zero Rust/Cargo dependencies"
-info "Safe for Termux mobile data (no crates.io downloads)"
+step "Installing Python dependencies..."
+info "Using web3 6.x — no psutil, no pydantic-core Rust build, Android-compatible"
 
 PIP_FLAGS="--quiet"
 [ "$IS_TERMUX" = "1" ] && PIP_FLAGS="--quiet --no-cache-dir"
 
 pip install $PIP_FLAGS --upgrade pip
 pip install $PIP_FLAGS -r "$SCRIPT_DIR/python/requirements_flash.txt"
-ok "Dependencies installed (web3 v5, aiohttp, dotenv, hexbytes)"
+ok "Dependencies installed (web3 6.x, aiohttp, dotenv, hexbytes)"
 
 # ── 4. Data directory ────────────────────────────────────────
 step "Creating data directory at $DATA_DIR..."
