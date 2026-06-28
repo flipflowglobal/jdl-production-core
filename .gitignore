@@ -12,3 +12,4 @@ data/
 .DS_Store
 *.db
 logs/
+revenue_system/__pycache__/
