@@ -26,7 +26,10 @@ from dataclasses import dataclass, asdict, field
 from enum import Enum
 from dotenv import load_dotenv
 
-load_dotenv('/home/userland/jdl/.env')
+# Robust .env loading for Termux/Linux
+load_dotenv(os.path.expanduser('~/jdl/.env'))
+load_dotenv(os.path.expanduser('~/.jdl/.env'))
+load_dotenv('.env')
 
 # ─────────────────────────────────────────────
 #  TERMINAL COLORS

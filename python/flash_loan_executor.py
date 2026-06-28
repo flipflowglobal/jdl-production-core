@@ -21,7 +21,10 @@ except ImportError:
     WEB3_OK = False
 
 # Load environment
+# Robust .env loading for Termux/Linux
 load_dotenv(os.path.expanduser('~/jdl/.env'))
+load_dotenv(os.path.expanduser('~/.jdl/.env'))
+load_dotenv('.env')
 
 class FlashLoanExecutor:
     """Unified flash loan execution (Aave, Balancer, zero-gas variants)."""

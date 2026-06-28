@@ -1,5 +1,11 @@
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Robust .env loading for Termux/Linux
+load_dotenv(os.path.expanduser('~/jdl/.env'))
+load_dotenv(os.path.expanduser('~/.jdl/.env'))
+load_dotenv('.env')
 
 REQUIRED_PROD = ["PRIVATE_KEY", "ALCHEMY_ARB_KEY"]
 
