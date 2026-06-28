@@ -10,12 +10,12 @@ pkg update -y
 pkg install -y python git openssl libffi
 ```
 
-### 2. Clone the flashloan branch
+### 2. Clone the main branch (Hardened)
 ```bash
 mkdir -p ~/projects
 git clone https://github.com/flipflowglobal/jdl-production-core.git \
     ~/projects/jdl-production-core \
-    --branch flashloan --single-branch --depth 1
+    --branch main --single-branch --depth 1
 cd ~/projects/jdl-production-core
 ```
 
@@ -40,22 +40,25 @@ ALCHEMY_ARB_KEY=...        # free key from alchemy.com → Arbitrum One
 ### 5. Launch
 ```bash
 source ~/.flash_venv/bin/activate
-python3 python/flash_loan_engine.py
+# Note: engine.py has been modularized to trading_core.py
+python3 python/trading_core.py
 ```
 
 ### 6. Keep running (optional)
 ```bash
 termux-wake-lock                          # prevent CPU sleep
-nohup python3 python/flash_loan_engine.py > ~/flash.log 2>&1 &
+nohup python3 python/trading_core.py > ~/flash.log 2>&1 &
 tail -f ~/flash.log                       # watch live output
 ```
 
 ## Pull updates
 ```bash
 cd ~/projects/jdl-production-core
-git pull origin flashloan
+git pull origin main
 source ~/.flash_venv/bin/activate
-pip install --no-cache-dir -r python/requirements_flash.txt
+pip install --no-cache-dir -r python/requirements.txt
+# Run security audit after update
+bash scripts/security-audit.sh
 ```
 
 ## Menu options
