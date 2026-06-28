@@ -195,14 +195,14 @@ if [ "$IS_TERMUX" = "1" ]; then
     echo -e "  ${DIM}• Keep screen on while running: termux-wake-lock${RESET}"
     echo -e "  ${DIM}• Run in background:  nohup bash setup.sh run &${RESET}"
     echo -e "  ${DIM}• View logs:          tail -f ~/.flash_loan_engine/flash.log${RESET}"
-    echo -e "  ${DIM}• Stop engine:        pkill -f flash_loan_engine${RESET}"
+    echo -e "  ${DIM}• Stop engine:        pkill -f trading_core${RESET}"
     echo
 fi
 
 # ── Optional: run or test ─────────────────────────────────────
 if [ "$1" = "run" ] || [ "$1" = "termux" ]; then
     echo -e "${CYAN}Launching Flash Loan Engine...${RESET}"
-    python3 "$SCRIPT_DIR/python/flash_loan_engine.py"
+    python3 "$SCRIPT_DIR/python/trading_core.py"
 elif [ "$1" = "test" ]; then
     echo -e "${CYAN}Running test suite (expect 56/56)...${RESET}"
     python3 "$SCRIPT_DIR/python/test_flash_engine.py"
