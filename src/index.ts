@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { validateConfig, CONFIG } from './config';
 import app from "./app";
 import { logger } from "./lib/logger";
 import { initDatabase } from "./services/database";
@@ -9,6 +10,8 @@ import { pool } from "./services/database";
 import http from "http";
 
 let server: http.Server | undefined;
+
+validateConfig();
 
 process.on("uncaughtException", (err) => {
   logger.error({ err }, "[FATAL] Uncaught exception");

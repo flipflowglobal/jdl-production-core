@@ -4,8 +4,17 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import session from "express-session";
 import pinoHttp from "pino-http";
+import pino from 'pino-http';
+
+function sanitizeHeaders(headers: any) {
+  const safe = { ...headers };
+  delete safe.authorization;  // Remove Bearer tokens
+  delete safe['x-api-key'];
+  return safe;
+}
 import { apiKeyCheck } from "./middleware/auth";
 import router from "./routes";
+import { setupHealth } from './health';
 import { logger } from "./lib/logger";
 
 const app: Express = express();
@@ -13,11 +22,27 @@ const app: Express = express();
 app.set("trust proxy", 1);
 
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],      // No inline scripts
+        styleSrc: ["'self'", "'unsafe-inline'"],  // CSS safe
+        imgSrc: ["'self'", 'data:', 'https:'],
+        connectSrc: ["'self'", 'https://api.alchemy.com', 'https://relay.flashbots.net'],
+        fontSrc: ["'self'"],
+      },
+    },
   crossOriginEmbedderPolicy: false,
 }));
 
-app.use(cors({ origin: process.env.CORS_ORIGIN?.split(",") || ["http://localhost:3000"], credentials: true }));
+app.use(cors({ origin: (origin, callback) => {
+    const allowed = process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'];
+    if (!origin || allowed.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS not allowed'));
+    }
+  }, credentials: true }));
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -44,24 +69,32 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === "production",
-    httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000,
-    sameSite: "lax",
+    httpOnly: true,      // Prevent JS access
+    secure: true,        // HTTPS only
+    sameSite: 'strict',  // CSRF protection
+    maxAge: 3600000,     // 1 hour
   },
 }));
 
-app.use(pinoHttp({
-  logger,
-  serializers: {
-    req(req) { return { id: req.id, method: req.method, url: req.url?.split("?")[0] }; },
-    res(res) { return { statusCode: res.statusCode }; },
-  },
-}));
+app.use(
+  pino({
+    logger,
+    serializers: {
+      req(req) {
+        return {
+          method: req.method,
+          url: req.url.split('?')[0], // Strip query params
+          headers: sanitizeHeaders(req.headers),
+        };
+      },
+    },
+  })
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+setupHealth(app);
 app.use("/api", router);
 
 export default app;
