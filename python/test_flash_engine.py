@@ -13,12 +13,8 @@ import os
 import time
 from pathlib import Path
 
-# Allow import from same directory
 sys.path.insert(0, str(Path(__file__).parent))
 
-# ─────────────────────────────────────────────
-#  COLOR (standalone, no dependency)
-# ─────────────────────────────────────────────
 class C:
     RESET=  "\033[0m"; BOLD=   "\033[1m"; DIM=    "\033[2m"
     RED=    "\033[31m";GREEN=  "\033[32m";YELLOW= "\033[33m"
@@ -46,9 +42,6 @@ def check(name: str, cond: bool, detail: str = ''):
 def section(title: str):
     print(f"\n  {C.CYAN}{C.BOLD}── {title} ──{C.RESET}")
 
-# ─────────────────────────────────────────────
-#  IMPORT ENGINE
-# ─────────────────────────────────────────────
 try:
     from flash_loan_engine import (
         GARCH11, KalmanPrice, OrnsteinUhlenbeck, KellyCriterion,
@@ -62,35 +55,23 @@ except ImportError as e:
     ENGINE_OK = False
     print(f"{C.RED}Cannot import flash_loan_engine: {e}{C.RESET}")
 
-# ─────────────────────────────────────────────
-#  TEST FUNCTIONS
-# ─────────────────────────────────────────────
 
 def test_garch():
     section('GARCH(1,1)')
     g = GARCH11(omega=1e-6, alpha=0.15, beta=0.80)
     check('Initial σ² positive', g.sigma2 > 0)
-
-    # Feed returns and check vol updates
     vol = g.update(0.02)
     check('Vol after shock > 0', vol > 0)
     check('Vol is float', isinstance(vol, float))
-
-    # Large shock should increase vol
     v0 = g.sigma2
-    g.update(0.10)  # 10% shock
-    check('Large shock increases variance', g.sigma2 > v0,
-          f'{g.sigma2:.2e} vs {v0:.2e}')
-
-    # Predict h-step
+    g.update(0.10)
+    check('Large shock increases variance', g.sigma2 > v0, f'{g.sigma2:.2e} vs {v0:.2e}')
     pred1 = g.predict(1)
     pred5 = g.predict(5)
     check('1-step prediction positive', pred1 > 0)
     check('5-step reverts toward long-run', pred5 <= pred1 or pred5 > 0)
-
-    # High vol flag
     g2 = GARCH11()
-    for _ in range(5): g2.update(0.08)  # repeated big shocks
+    for _ in range(5): g2.update(0.08)
     check('high_vol detected after shocks', g2.high_vol(1.0))
 
 
@@ -100,9 +81,7 @@ def test_kalman():
     obs = [2000.0, 2001.0, 1999.5, 2002.0, 2000.5]
     ests = [kf.update(o) for o in obs]
     check('All estimates are floats', all(isinstance(e,float) for e in ests))
-    check('Estimate converges (not wild outlier)', all(1800 < e < 2200 for e in ests),
-          str(ests))
-    # Noise rejection: estimate should be smoother than raw
+    check('Estimate converges (not wild outlier)', all(1800 < e < 2200 for e in ests), str(ests))
     raw_var  = sum((o-sum(obs)/len(obs))**2 for o in obs)
     est_mean = sum(ests)/len(ests)
     est_var  = sum((e-est_mean)**2 for e in ests)
@@ -117,15 +96,13 @@ def test_ou():
     spreads = [0.004 + random.gauss(0, 0.001) for _ in range(50)]
     for s in spreads: ou.update(s)
     check('theta > 0 after calibration', ou.theta > 0)
-    check('mu near true mean', abs(ou.mu - 0.004) < 0.003,
-          f'mu={ou.mu:.6f}')
+    check('mu near true mean', abs(ou.mu - 0.004) < 0.003, f'mu={ou.mu:.6f}')
     hl = ou.half_life()
     check('half_life positive', hl > 0, f'hl={hl:.2f}s')
     rp = ou.reversion_prob(0.005, 60)
     check('reversion_prob in [0,1]', 0.0 <= rp <= 1.0, f'rp={rp:.4f}')
-    rp_wide = ou.reversion_prob(0.10, 60)  # far from mean
-    check('wide spread has lower rev prob', rp_wide <= rp,
-          f'{rp_wide:.4f} vs {rp:.4f}')
+    rp_wide = ou.reversion_prob(0.10, 60)
+    check('wide spread has lower rev prob', rp_wide <= rp, f'{rp_wide:.4f} vs {rp:.4f}')
 
 
 def test_kelly():
@@ -134,38 +111,30 @@ def test_kelly():
     f = k.fraction(0.60, 2.0, 'NEUTRAL')
     check('Kelly fraction positive', f > 0, f'f={f:.4f}')
     check('Kelly fraction <= 20%', f <= 0.20, f'f={f:.4f}')
-    # Bull > Neutral > Bear
     fb = k.fraction(0.60, 2.0, 'BULL')
     fn = k.fraction(0.60, 2.0, 'NEUTRAL')
     fr = k.fraction(0.60, 2.0, 'BEAR')
     check('BULL > NEUTRAL', fb >= fn, f'{fb:.4f} vs {fn:.4f}')
     check('NEUTRAL >= BEAR', fn >= fr, f'{fn:.4f} vs {fr:.4f}')
-    # Zero or negative edge → 0
-    f0 = k.fraction(0.30, 0.5, 'NEUTRAL')  # bad odds
+    f0 = k.fraction(0.30, 0.5, 'NEUTRAL')
     check('Negative edge clamped to 0', f0 == 0.0, f'f0={f0:.4f}')
 
 
 def test_newton_raphson_amm():
     section('Newton-Raphson AMM')
     nr = NewtonRaphsonAMM(iters=5)
-    rx, ry = 1_000_000.0, 500.0   # USDC/WETH pool
-    ain    = 1_000.0              # buy 1000 USDC worth
-
+    rx, ry = 1_000_000.0, 500.0
+    ain    = 1_000.0
     out = nr.out(rx, ry, ain, 30)
     check('Output positive', out > 0, f'out={out:.6f}')
     check('Output < reserve_out', out < ry, f'out={out:.6f} ry={ry}')
-
-    # Constant product check
     k_before = rx * ry
     k_after  = (rx + ain*0.997) * (ry - out)
     check('Approx constant product', abs(k_after/k_before - 1) < 0.01,
           f'ratio={k_after/k_before:.6f}')
-
     impact = nr.impact_pct(rx, ry, ain, 30)
     check('Price impact positive', impact >= 0, f'{impact:.4f}%')
     check('Price impact < 5% for small trade', impact < 5.0, f'{impact:.4f}%')
-
-    # Large trade → larger impact
     impact_big = nr.impact_pct(rx, ry, 500_000.0, 30)
     check('Large trade > small trade impact', impact_big > impact,
           f'{impact_big:.2f}% vs {impact:.2f}%')
@@ -176,23 +145,23 @@ def test_bellman_ford():
     bf = BellmanFordArb()
     tokens = ['USDC', 'WETH', 'WBTC']
 
-    # No arb: balanced prices
+    # Balanced prices: WBTC=$30000, WETH=$2000 → 1 WBTC = 15 WETH
+    # Round-trip WETH→WBTC→USDC→WETH = (1/15)*30000*(1/2000) = 1.0 exactly
     prices_flat = {
-        ('USDC','WETH'): 1/2000, ('WETH','USDC'): 2000,
-        ('WETH','WBTC'): 15.0,   ('WBTC','WETH'): 1/15,
-        ('USDC','WBTC'): 1/30000,('WBTC','USDC'): 30000,
+        ('USDC','WETH'): 1/2000,  ('WETH','USDC'): 2000,
+        ('WETH','WBTC'): 1/15,    ('WBTC','WETH'): 15,      # 1 WBTC costs 15 WETH
+        ('USDC','WBTC'): 1/30000, ('WBTC','USDC'): 30000,
     }
     cycle = bf.find(prices_flat, tokens)
     check('No cycle in balanced market', cycle is None, str(cycle))
 
-    # Arb: 1 USDC→WETH→WBTC→USDC = >1
+    # Arb: ('WETH','WBTC') at 15.2 makes round-trip > 1
     prices_arb = {
         ('USDC','WETH'):  1/1990,  ('WETH','USDC'):  1990,
         ('WETH','WBTC'):  15.2,    ('WBTC','WETH'):  1/15,
         ('USDC','WBTC'):  1/30000, ('WBTC','USDC'):  30000,
     }
     cycle2 = bf.find(prices_arb, tokens)
-    # May or may not detect depending on magnitude; just check it doesn't crash
     check('Arb scan runs without error', True)
 
 
@@ -200,41 +169,35 @@ def test_ucb1():
     section('UCB1 Bandit')
     b = UCB1Bandit(7)
     check('Initial N=0', b.N == 0)
-    # Force each arm once
     for i in range(7):
         arm = b.choose()
         b.update(arm, random.uniform(-1,5))
     check('N=7 after 7 updates', b.N == 7)
     check('All arms tried', all(c > 0 for c in b.counts))
-
-    # Feed arm 2 with high rewards
     for _ in range(20): b.update(2, 10.0)
     check('Best arm = high reward arm', b.best() == 2,
           f'best={b.best()} counts={b.counts} rewards={[round(r,1) for r in b.rewards]}')
-
-    # UCB1 score computed without error
     arm = b.choose()
     check('choose() returns valid arm', 0 <= arm < 7, str(arm))
 
 
 def test_qlearning():
     section('Q-Learning')
-    q = QLearning(alpha=0.1, gamma=0.95, eps=0.0)  # greedy
-    s = q.encode(False, True, False)  # state 2
+    q = QLearning(alpha=0.1, gamma=0.95, eps=0.0)
+    s = q.encode(False, True, False)
     check('State encoding in [0,7]', 0 <= s <= 7, str(s))
 
-    # Force high Q for arm 3 in state 0
     q.Q[0][3] = 100.0
     q.eps = 0.0
     arm = q.choose(0)
     check('Greedy selects max Q arm', arm == 3, f'chose {arm}')
 
-    # Update
+    # next_state=1 has all-zero Q → TD = 5 + 0.95*0 - 100 = -95 → Q changes
     q.ls = 0; q.la = 3
-    q.update(5.0, 0)
-    check('Q updated after reward', q.Q[0][3] != 100.0)
+    q.update(5.0, 1)
+    check('Q updated after reward', q.Q[0][3] != 100.0,
+          f'Q[0][3]={q.Q[0][3]}')
 
-    # Epsilon decays
     q2 = QLearning(eps=0.5)
     old_eps = q2.eps
     q2.update(1.0, 0)
@@ -245,7 +208,6 @@ def test_fourier():
     section('Fourier Cycle Detector')
     fc = FourierCycle()
     check('None before enough data', fc.period_s() is None)
-    # Add sinusoidal pattern with 16-sample period
     for i in range(64):
         fc.add(2000 + 10*math.sin(2*math.pi*i/16))
     p = fc.period_s(rate=15.0)
@@ -265,14 +227,12 @@ def test_ema_zscore():
     ema.update('USDC/WETH', False)
     w2 = ema.get('USDC/WETH')
     check('Weight decays on found=False', w2 < w1, f'{w1:.4f}->{w2:.4f}')
-
     zs = ZScoreDetector()
-    for v in [1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0]:
-        zs.update('k', v)
+    for v in [1.0]*10: zs.update('k', v)
     z = zs.update('k', 1.0)
     check('Z-score 0 for constant series', abs(z) < 0.1, f'{z:.4f}')
     for v in [1.0]*19: zs.update('k2', v)
-    z2 = zs.update('k2', 10.0)  # big outlier
+    z2 = zs.update('k2', 10.0)
     check('Z-score high for outlier', abs(z2) > 2.0, f'{z2:.4f}')
     check('is_anomaly True for outlier', zs.is_anomaly('k2', 10.0))
 
@@ -296,7 +256,6 @@ async def test_scanner():
     init_db()
     feed    = PriceFeed()
     scanner = OpportunityScanner(feed)
-    # Run multiple scans — may or may not find opp depending on random spread
     found = 0
     for _ in range(20):
         opp = scanner.scan()
@@ -307,7 +266,7 @@ async def test_scanner():
             check(f'Kelly frac in [0,0.2]', 0 <= opp.kelly_frac <= 0.20)
             break
     check('Scanner runs without error', True)
-    check('Scanner respects vol gate (GARCH)', True)  # structural test
+    check('Scanner respects vol gate (GARCH)', True)
 
 
 async def test_daemon_cycle():
@@ -317,7 +276,6 @@ async def test_daemon_cycle():
     check('Daemon initialises', daemon is not None)
     check('Bandit has correct arms', daemon.bandit.n == len(GAS_STRATEGIES),
           f'{daemon.bandit.n} vs {len(GAS_STRATEGIES)}')
-    # Run one cycle non-verbosely
     try:
         await asyncio.wait_for(daemon.cycle_run(verbose=False), timeout=5.0)
         check('Single cycle completes', True)
@@ -327,9 +285,6 @@ async def test_daemon_cycle():
         check('Single cycle completes', False, str(e))
 
 
-# ─────────────────────────────────────────────
-#  RUNNER
-# ─────────────────────────────────────────────
 async def run_all_tests(verbose: bool = True):
     global _pass, _fail, _results
     _pass = 0; _fail = 0; _results = []
@@ -372,9 +327,9 @@ async def run_all_tests(verbose: bool = True):
 if __name__ == '__main__':
     print(f"""
 {C.BCYAN}{C.BOLD}
-  ┌────────────────────────────────────────────────┐
-  │  Flash Loan Engine — Test Suite             │
-  └────────────────────────────────────────────────┘
+  ┌{'─'*48}┐
+  │  Flash Loan Engine — Test Suite                  │
+  └{'─'*48}┘
 {C.RESET}""")
     success = asyncio.run(run_all_tests())
     sys.exit(0 if success else 1)
