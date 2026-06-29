@@ -160,6 +160,17 @@ ZERO_ADDR  = '0x0000000000000000000000000000000000000000'
 #   protocol, pool, tokenIn, tokenOut, fee, minAmountOut, curveIndexIn, curveIndexOut, balancerPoolId
 _STEP_TUPLE = '(uint8,address,address,address,uint24,uint256,uint8,uint8,bytes32)'
 
+# Use real Uniswap V3 QuoterV2 prices instead of the simulated spread model.
+USE_REAL_QUOTES = _env('USE_REAL_QUOTES', 'REAL_QUOTES', default='').lower() in ('1','true','yes','on')
+REAL_LOAN_USD   = float(_env('REAL_LOAN_USD', default='10000') or '10000')
+
+# Uniswap V3 QuoterV2 (same canonical address on Arbitrum/Ethereum/Optimism/Polygon)
+QUOTER_V2 = '0x61fFE014bA17989E743c5F6cB21bF9697530B21e'
+# Native USDC on Arbitrum (Quoter pools use native USDC, not bridged USDC.e)
+USDC_NATIVE = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831'
+WETH_ARB_T  = '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1'
+_QUOTER_ABI = json.loads('[{"inputs":[{"components":[{"name":"tokenIn","type":"address"},{"name":"tokenOut","type":"address"},{"name":"amountIn","type":"uint256"},{"name":"fee","type":"uint24"},{"name":"sqrtPriceLimitX96","type":"uint160"}],"name":"params","type":"tuple"}],"name":"quoteExactInputSingle","outputs":[{"name":"amountOut","type":"uint256"},{"name":"sqrtPriceX96After","type":"uint160"},{"name":"initializedTicksCrossed","type":"uint32"},{"name":"gasEstimate","type":"uint256"}],"stateMutability":"nonpayable","type":"function"}]')
+
 # ─────────────────────────────────────────────
 #  DEPLOYED FLASH LOAN PROTOCOLS — ARBITRUM ONE
 #  No custom contract needed — system uses these directly.
@@ -314,7 +325,7 @@ def banner():
   ╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
 {C.RESET}{C.BYELLOW}    Zero-Gas Flash Loan Arbitrage Engine v1.0
 {C.DIM}    PEG · Flashbots · GARCH · Kalman · UCB1 · Q-Learn{C.RESET}
-{C.CYAN}═══════════════════════════════════════════════════════{C.RESET}
+{C.CYAN}══════════════════════════════════════════════════════{C.RESET}
 """)
 
 # ─────────────────────────────────────────────
@@ -793,6 +804,87 @@ class OpportunityScanner:
         )
 
 # ─────────────────────────────────────────────
+#  REAL UNISWAP V3 QUOTER  (live on-chain prices)
+# ─────────────────────────────────────────────
+class UniV3Quoter:
+    """Wraps Uniswap V3 QuoterV2.quoteExactInputSingle (called via eth_call)."""
+    def __init__(self, w3=None):
+        self._w3 = w3 if w3 is not None else get_w3()
+        self._c  = None
+        if self._w3 and WEB3_OK:
+            try:
+                self._c = self._w3.eth.contract(address=_w3_cs(QUOTER_V2), abi=_QUOTER_ABI)
+            except Exception:
+                self._c = None
+    def ready(self) -> bool:
+        return self._c is not None
+    def quote(self, token_in: str, token_out: str, amount_in: int, fee: int) -> Optional[int]:
+        """Exact-input single-hop quote. Returns amountOut (base units) or None."""
+        if not self._c:
+            return None
+        try:
+            params = (_w3_cs(token_in), _w3_cs(token_out), int(amount_in), int(fee), 0)
+            res = self._c.functions.quoteExactInputSingle(params).call()
+            return int(res[0]) if isinstance(res, (list, tuple)) else int(res)
+        except Exception:
+            return None
+
+class RealQuoteScanner:
+    """Real cross-fee-tier arbitrage scan via QuoterV2:
+    USDC --(feeA)--> WETH --(feeB)--> USDC.  profit = out - loan - aave_premium.
+    In efficient markets this is usually <= 0; that is the honest, correct result."""
+    PAIRS = [(500,3000),(3000,500),(500,10000),(10000,500),(100,500),(500,100),(3000,10000),(10000,3000)]
+    def __init__(self, feed: 'PriceFeed'):
+        self.feed   = feed
+        self.quoter = UniV3Quoter(feed._w3)
+        self.kelly  = KellyCriterion()
+    def ready(self) -> bool:
+        return self.quoter.ready()
+    def best_roundtrip(self, loan_usdc: float):
+        """Return (profit_base, buy_fee, sell_fee, usdc_out, weth_mid) for the best
+        fee-tier pair, or None if no pool answered. profit_base may be negative."""
+        if not self.quoter.ready():
+            return None
+        amount_in = int(loan_usdc * 1e6)            # native USDC = 6 decimals
+        aave_fee  = amount_in * 5 // 10000          # Aave V3 flash premium = 0.05%
+        best = None
+        for buy_fee, sell_fee in self.PAIRS:
+            weth_out = self.quoter.quote(USDC_NATIVE, WETH_ARB_T, amount_in, buy_fee)
+            if not weth_out:
+                continue
+            usdc_out = self.quoter.quote(WETH_ARB_T, USDC_NATIVE, weth_out, sell_fee)
+            if not usdc_out:
+                continue
+            profit_base = usdc_out - amount_in - aave_fee
+            if best is None or profit_base > best[0]:
+                best = (profit_base, buy_fee, sell_fee, usdc_out, weth_out)
+        return best
+    def scan(self, loan_usdc: float = None) -> Optional[Opportunity]:
+        loan_usdc = loan_usdc if loan_usdc is not None else REAL_LOAN_USD
+        best = self.best_roundtrip(loan_usdc)
+        if not best:
+            return None
+        profit_base, buy_fee, sell_fee, usdc_out, weth_mid = best
+        profit_usd = profit_base / 1e6
+        if profit_usd < MIN_PROFIT_USD:
+            return None                              # no real edge (expected, efficient market)
+        spread = profit_usd / max(loan_usdc, 1e-9)
+        kf = self.kelly.fraction(0.60, max(profit_usd, 0.01) / max(loan_usdc*0.0005, 0.01))
+        db_exec("""
+            INSERT INTO opportunities(id,type,chain,protocol,profit_usd,status,details,found_at)
+            VALUES(?,?,?,?,?,?,?,?)""",
+            (hashlib.md5(f'{time.time()}rqs'.encode()).hexdigest(),
+             'UNIV3_FEE_ARB','arbitrum','uni_v3_quoter',
+             round(profit_usd,4),'pending',
+             json.dumps({'buy_fee':buy_fee,'sell_fee':sell_fee,'usdc_out':usdc_out}),
+             datetime.now().isoformat()))
+        return Opportunity(
+            type='UNIV3_FEE_ARB', asset=USDC_NATIVE, token_inter=WETH_ARB_T,
+            loan_usd=loan_usdc, profit_usd=profit_usd,
+            buy_fee=buy_fee, sell_fee=sell_fee, dex_type=0,
+            vol=0.0, kelly_frac=kf, spread=spread, source='UNI_V3_QUOTER')
+
+# ─────────────────────────────────────────────
 #  GAS SUBMITTER
 # ─────────────────────────────────────────────
 class FlashbotsPEG:
@@ -918,6 +1010,7 @@ class FlashDaemon:
         self.peg     = FlashbotsPEG()
         self.gelato  = GelatoSubmitter()
         self.nexus   = NexusExecutor()
+        self.rqs     = RealQuoteScanner(self.feed)
         self.finder  = ProtocolFinder(self.feed._w3)
         self.running = False
         self.cycle   = 0
@@ -931,7 +1024,10 @@ class FlashDaemon:
         eth_p   = self.feed.eth_price()
         gas_g   = self.feed.gas_gwei()
         gas_usd = self.feed.gas_usd()
-        opp = self.scanner.scan()
+        if USE_REAL_QUOTES and self.rqs.ready():
+            opp = self.rqs.scan(REAL_LOAN_USD)     # real on-chain QuoterV2 prices
+        else:
+            opp = self.scanner.scan()              # simulated spread model
         if not opp:
             if verbose:
                 print(f"  {C.DIM}[{ts}] #{self.cycle:04d} scanning — no edge detected  eth=${eth_p:,.0f}  gas={gas_g:.3f}gwei{C.RESET}")
@@ -1050,6 +1146,7 @@ def print_menu():
   {C.CYAN}[9]{C.RESET} Discover Flash Loan Protocols
   {C.CYAN}[c]{C.RESET} Test On-Chain Connection
   {C.CYAN}[x]{C.RESET} Build Execution Calldata (dry-run)
+  {C.CYAN}[q]{C.RESET} Real Quote Scan (Uniswap V3)
   {C.CYAN}[0]{C.RESET} Exit
 """)
 
@@ -1067,6 +1164,8 @@ async def menu_run_daemon():
         print(f"  {C.YELLOW}LIVE_EXECUTION off — DRY-RUN: real calldata built, not broadcast.{C.RESET}")
     else:
         print(f"  {C.BGREEN}LIVE — broadcasting initiateFlashLoan txs to {CONTRACT[:12]}…{C.RESET}")
+    if USE_REAL_QUOTES:
+        print(f"  {C.BCYAN}Real Uniswap V3 quotes ON (loan ${REAL_LOAN_USD:,.0f}).{C.RESET}")
     print(f"  Press {C.BOLD}Ctrl+C{C.RESET} to stop.\n")
     try:
         raw = input(f"  Scan interval seconds [{CYCLE_SEC}]: ").strip()
@@ -1196,6 +1295,7 @@ def menu_status():
     print(f"    Flashbots: {C.BGREEN if FB_SECRET else C.DIM}{'configured' if FB_SECRET else 'not set'}{C.RESET}")
     print(f"    Web3:      {C.BGREEN if WEB3_OK else C.RED}{'OK (v5 Termux-compat)' if WEB3_OK else 'not installed'}{C.RESET}")
     print(f"    Execution: {(C.BGREEN+'LIVE (broadcasting)') if LIVE_EXEC else (C.YELLOW+'dry-run (set LIVE_EXECUTION=1)')}{C.RESET}")
+    print(f"    Quotes:    {(C.BCYAN+'real Uniswap V3') if USE_REAL_QUOTES else (C.DIM+'simulated (set USE_REAL_QUOTES=1)')}{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 def menu_config():
@@ -1222,7 +1322,8 @@ def menu_config():
         sym = f"{C.BGREEN}YES{C.RESET}" if ok else f"{C.YELLOW}NO {C.RESET}"
         print(f"  {C.CYAN}{var:<28}{C.RESET} {sym}  {C.DIM}{desc}{C.RESET}")
     exec_line = f"{C.BGREEN}LIVE{C.RESET}" if LIVE_EXEC else f"{C.YELLOW}dry-run{C.RESET}"
-    print(f"\n  LIVE_EXECUTION: {exec_line}   {C.DIM}(1/true/yes/on to broadcast){C.RESET}")
+    quote_line = f"{C.BCYAN}real{C.RESET}" if USE_REAL_QUOTES else f"{C.DIM}simulated{C.RESET}"
+    print(f"\n  LIVE_EXECUTION: {exec_line}   USE_REAL_QUOTES: {quote_line}   {C.DIM}(edit ~/jdl/.env){C.RESET}")
     print(f"  Edit: {C.CYAN}nano ~/jdl/.env{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
@@ -1285,17 +1386,25 @@ def menu_build_calldata():
     if not (WEB3_OK and _abi_encode):
         print(f"  {C.RED}web3/eth_abi unavailable — pip install -r python/requirements_flash.txt{C.RESET}")
         input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
-    feed = PriceFeed(); scanner = OpportunityScanner(feed); opp = None
-    for _ in range(30):
-        opp = scanner.scan()
-        if opp: break
-    if not opp:
-        print(f"  {C.YELLOW}No opportunity surfaced this pass — try again.{C.RESET}")
-        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    feed = PriceFeed()
+    if USE_REAL_QUOTES:
+        rqs = RealQuoteScanner(feed); opp = rqs.scan(REAL_LOAN_USD) if rqs.ready() else None
+        if not opp:
+            print(f"  {C.YELLOW}No profitable real-quote edge right now (efficient market). Showing nothing to build.{C.RESET}")
+            input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    else:
+        scanner = OpportunityScanner(feed); opp = None
+        for _ in range(30):
+            opp = scanner.scan()
+            if opp: break
+        if not opp:
+            print(f"  {C.YELLOW}No opportunity surfaced this pass — try again.{C.RESET}")
+            input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
     amount = int(opp.loan_usd*1e6); premium = amount*5//10000
     steps  = build_swap_steps(opp); data = build_initiate_calldata(opp)
     print(f"  Target contract : {C.CYAN}{CONTRACT}{C.RESET}")
     print(f"  Function        : {C.BWHITE}initiateFlashLoan(address,uint256,bytes){C.RESET}")
+    print(f"  Source          : {C.DIM}{opp.source}{C.RESET}")
     print(f"  Asset (USDC)    : {C.CYAN}{opp.asset}{C.RESET}")
     print(f"  Loan amount     : {C.BYELLOW}{amount:,}{C.RESET} base units  ({C.DIM}${opp.loan_usd:,.0f}{C.RESET})")
     print(f"  Aave premium    : {premium:,}  {C.DIM}(0.05%){C.RESET}")
@@ -1308,6 +1417,43 @@ def menu_build_calldata():
     live = f"{C.BGREEN}ON{C.RESET}" if LIVE_EXEC else f"{C.YELLOW}OFF{C.RESET}"
     print(f"\n  LIVE_EXECUTION: {live}   {C.DIM}(set LIVE_EXECUTION=1 in ~/jdl/.env to broadcast){C.RESET}")
     print(f"  {C.DIM}Flash loans are atomic: an unprofitable route reverts on-chain (only gas lost).{C.RESET}")
+    input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
+
+def menu_real_quote():
+    clear()
+    print(f"\n{C.BOLD}{C.CYAN}  ─── REAL QUOTE SCAN  (Uniswap V3 QuoterV2) ───{C.RESET}\n")
+    print(_chain_line()); print()
+    feed = PriceFeed(); rqs = RealQuoteScanner(feed)
+    if not rqs.ready():
+        print(f"  {C.RED}QuoterV2 unavailable — need web3 + an RPC. Set ALCHEMY_ARB_KEY/RPC_URL.{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    loan = REAL_LOAN_USD
+    print(f"  Loan size : {C.BYELLOW}${loan:,.0f}{C.RESET} USDC   {C.DIM}(REAL_LOAN_USD){C.RESET}")
+    print(f"  Route     : USDC → WETH → USDC across fee tiers\n")
+    print(f"  {'buy':>5} {'sell':>5} {'WETH out':>16} {'USDC back':>14} {'net (incl 0.05% fee)':>22}")
+    print(f"  {'─'*5} {'─'*5} {'─'*16} {'─'*14} {'─'*22}")
+    amount_in = int(loan*1e6); aave_fee = amount_in*5//10000; any_q=False
+    for buy_fee, sell_fee in rqs.PAIRS:
+        weth = rqs.quoter.quote(USDC_NATIVE, WETH_ARB_T, amount_in, buy_fee)
+        if not weth:
+            print(f"  {buy_fee:>5} {sell_fee:>5} {C.DIM}{'no pool':>16}{C.RESET}"); continue
+        back = rqs.quoter.quote(WETH_ARB_T, USDC_NATIVE, weth, sell_fee)
+        if not back:
+            print(f"  {buy_fee:>5} {sell_fee:>5} {weth/1e18:>16.6f} {C.DIM}{'no pool':>14}{C.RESET}"); continue
+        any_q=True
+        net = (back - amount_in - aave_fee)/1e6
+        col = C.BGREEN if net > 0 else C.RED
+        print(f"  {buy_fee:>5} {sell_fee:>5} {weth/1e18:>16.6f} {back/1e6:>14,.2f} {col}{net:>+22,.4f}{C.RESET}")
+    print()
+    if any_q:
+        opp = rqs.scan(loan)
+        if opp:
+            print(f"  {C.BGREEN}{C.BOLD}EDGE: ${opp.profit_usd:,.4f} on {opp.buy_fee}/{opp.sell_fee}{C.RESET}  → build calldata via menu [x]")
+        else:
+            print(f"  {C.YELLOW}No profitable edge right now (net ≤ ${MIN_PROFIT_USD:.2f}).{C.RESET}")
+            print(f"  {C.DIM}Expected in efficient markets — real edges are brief and rare.{C.RESET}")
+    else:
+        print(f"  {C.YELLOW}No pools answered (RPC rate-limit?). Try a keyed RPC.{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 async def main():
@@ -1329,6 +1475,7 @@ async def main():
         elif choice == '9': await menu_protocols()
         elif choice == 'c': menu_connection()
         elif choice == 'x': menu_build_calldata()
+        elif choice == 'q': menu_real_quote()
         elif choice == '0': print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
         else: print(f"  {C.RED}Invalid option.{C.RESET}"); await asyncio.sleep(0.4)
 
