@@ -49,6 +49,17 @@ try:
     def _blk(w3) -> int:
         try: return w3.eth.block_number
         except AttributeError: return w3.eth.blockNumber
+    def _chain_id(w3) -> int:
+        try: return w3.eth.chain_id
+        except AttributeError: return w3.eth.chainId
+    def _balance(w3, addr) -> int:
+        try: return w3.eth.get_balance(addr)
+        except AttributeError: return w3.eth.getBalance(addr)
+    def _is_connected(w3) -> bool:
+        try: return bool(w3.is_connected())
+        except AttributeError:
+            try: return bool(w3.isConnected())
+            except Exception: return False
     def _inject_poa(w3):
         try: w3.middleware_onion.inject(geth_poa_middleware, layer=0)
         except Exception:
@@ -62,29 +73,64 @@ except ImportError:
     def _gas_p(w): return 0.1
     def _nonce(w, a): return 0
     def _blk(w): return 0
+    def _chain_id(w): return 0
+    def _balance(w, a): return 0
+    def _is_connected(w): return False
     def _inject_poa(w): pass
 
 load_dotenv(os.path.expanduser('~/jdl/.env'))
 
-WALLET      = os.getenv('WALLET_ADDRESS', '')
-PRIV_KEY    = os.getenv('PRIVATE_KEY', '')
-ALCH_ARB    = os.getenv('ALCHEMY_ARB_KEY', '')
-ALCH_ETH    = os.getenv('ALCHEMY_ETH_KEY', '')
-FB_SECRET   = os.getenv('FLASHBOTS_SECRET', '')
-CONTRACT    = os.getenv('FLASH_CONTRACT_ADDRESS', '')
-GELATO_KEY  = os.getenv('GELATO_API_KEY', '')
-BICONOMY_K  = os.getenv('BICONOMY_API_KEY', '')
-PAYMASTER   = os.getenv('PAYMASTER_ADDRESS', '')
+def _env(*names, default=''):
+    """Return the first non-empty env var from the given aliases."""
+    for n in names:
+        v = os.getenv(n, '')
+        if v and v.strip():
+            return v.strip()
+    return default
 
-RPC_ARB = (f'https://arb-mainnet.g.alchemy.com/v2/{ALCH_ARB}'
-           if ALCH_ARB else 'https://arb1.arbitrum.io/rpc')
-RPC_ETH = (f'https://eth-mainnet.g.alchemy.com/v2/{ALCH_ETH}'
-           if ALCH_ETH else 'https://cloudflare-eth.com')
+# ─ Credentials (accept multiple naming conventions so any .env wires up) ─
+PRIV_KEY    = _env('PRIVATE_KEY', 'WALLET_PRIVATE_KEY')
+WALLET      = _env('WALLET_ADDRESS', 'WALLET')
+ALCH_ARB    = _env('ALCHEMY_ARB_KEY', 'ALCHEMY_ARBITRUM_KEY')
+ALCH_ETH    = _env('ALCHEMY_ETH_KEY', 'ALCHEMY_ETHEREUM_KEY')
+FB_SECRET   = _env('FLASHBOTS_SECRET', 'FLASHBOTS_AUTH_KEY', 'FLASHBOTS_SIGNER_KEY')
+CONTRACT    = _env('FLASH_CONTRACT_ADDRESS', 'CONTRACT_ADDRESS')
+GELATO_KEY  = _env('GELATO_API_KEY')
+BICONOMY_K  = _env('BICONOMY_API_KEY')
+PAYMASTER   = _env('PAYMASTER_ADDRESS')
+CHAIN_ID    = int(_env('CHAIN_ID', default='42161') or '42161')
+
+# ─ RPC resolution: explicit RPC_URL wins, else build from Alchemy key, else public ─
+_RPC_URL    = _env('RPC_URL', 'ARBITRUM_RPC_URL', 'ARB_RPC_URL')
+if _RPC_URL and 'YOUR_ALCHEMY' not in _RPC_URL and 'YOUR_KEY' not in _RPC_URL:
+    RPC_ARB = _RPC_URL
+elif ALCH_ARB:
+    RPC_ARB = f'https://arb-mainnet.g.alchemy.com/v2/{ALCH_ARB}'
+else:
+    RPC_ARB = 'https://arb1.arbitrum.io/rpc'   # public fallback (read-only ok, no key)
+
+_RPC_ETH_URL = _env('ETH_RPC_URL', 'ETHEREUM_RPC_URL')
+if _RPC_ETH_URL and 'YOUR' not in _RPC_ETH_URL:
+    RPC_ETH = _RPC_ETH_URL
+elif ALCH_ETH:
+    RPC_ETH = f'https://eth-mainnet.g.alchemy.com/v2/{ALCH_ETH}'
+else:
+    RPC_ETH = 'https://cloudflare-eth.com'
+
+# ─ Derive wallet address from private key if not explicitly set ─
+if not WALLET and PRIV_KEY and WEB3_OK:
+    try:
+        from eth_account import Account
+        WALLET = Account.from_key(PRIV_KEY).address
+    except Exception:
+        pass
+
+RPC_USING_KEY = bool((_RPC_URL and 'YOUR_ALCHEMY' not in _RPC_URL and 'YOUR_KEY' not in _RPC_URL) or ALCH_ARB)
 
 FLASHBOTS_RELAY  = 'https://relay.flashbots.net'
 GELATO_RELAY     = 'https://relay.gelato.digital/relays/v2/call-with-sync-fee'
 MEV_SHARE_URL    = 'https://mev-share.flashbots.net'
-MIN_PROFIT_USD   = 0.50
+MIN_PROFIT_USD   = float(_env('MIN_PROFIT_USD', default='0.50') or '0.50')
 MAX_LOAN_USD     = 500_000.0
 WITHDRAW_THRESH  = 1_000.0
 CYCLE_SEC        = 15
@@ -152,6 +198,57 @@ _TOKEN_DEC = {'USDC':6,'USDT':6,'WBTC':8,'WETH':18,'DAI':18,'ARB':18}
 
 DATA_DIR = Path.home() / '.flash_loan_engine'
 DB_PATH  = DATA_DIR / 'flash.db'
+
+# ─────────────────────────────────────────────
+#  SHARED WEB3 + LIVE CHAIN STATUS
+# ─────────────────────────────────────────────
+_W3_SINGLETON = None
+def get_w3():
+    """Lazily build and reuse a single Web3 connection to RPC_ARB."""
+    global _W3_SINGLETON
+    if not WEB3_OK:
+        return None
+    if _W3_SINGLETON is not None:
+        return _W3_SINGLETON
+    try:
+        w3 = Web3(Web3.HTTPProvider(RPC_ARB, request_kwargs={'timeout': 8}))
+        _inject_poa(w3)
+        _W3_SINGLETON = w3
+    except Exception:
+        _W3_SINGLETON = None
+    return _W3_SINGLETON
+
+_CHAIN_CACHE = {'ts': 0.0, 'data': None}
+def chain_status(force: bool = False) -> dict:
+    """Live on-chain status. Cached 30s to avoid hammering the RPC on every redraw."""
+    now = time.time()
+    if not force and _CHAIN_CACHE['data'] and (now - _CHAIN_CACHE['ts'] < 30):
+        return _CHAIN_CACHE['data']
+    out = {'connected': False, 'chain_id': None, 'block': None,
+           'gas_gwei': None, 'balance_eth': None, 'rpc': RPC_ARB,
+           'using_key': RPC_USING_KEY, 'error': None}
+    if not WEB3_OK:
+        out['error'] = 'web3 not installed'
+    else:
+        try:
+            w3 = get_w3()
+            if w3 is not None and _is_connected(w3):
+                out['connected'] = True
+                out['chain_id']  = _chain_id(w3)
+                out['block']     = _blk(w3)
+                out['gas_gwei']  = _gas_p(w3) / 1e9
+                if WALLET:
+                    try:
+                        out['balance_eth'] = _balance(w3, _w3_cs(WALLET)) / 1e18
+                    except Exception:
+                        pass
+            else:
+                out['error'] = 'RPC not reachable'
+        except Exception as e:
+            out['error'] = str(e)[:60]
+    _CHAIN_CACHE['ts'] = now
+    _CHAIN_CACHE['data'] = out
+    return out
 
 # ─────────────────────────────────────────────
 #  TERMINAL COLORS  (identical to jdl_engine.py)
@@ -492,13 +589,8 @@ class PriceFeed:
         self.kf = KalmanPrice()
         self._eth: float = 2000.0
         self._gas: float = 0.1
-        self._w3  = None
-        if WEB3_OK and ALCH_ARB:
-            try:
-                self._w3 = Web3(Web3.HTTPProvider(RPC_ARB, request_kwargs={'timeout':5}))
-                _inject_poa(self._w3)
-            except Exception:
-                self._w3 = None
+        # Always try to connect — public RPC works for reads even without a key.
+        self._w3 = get_w3()
 
     def eth_price(self) -> float:
         if self._w3:
@@ -531,7 +623,7 @@ class ProtocolFinder:
     No custom contract required — reads balances from already-deployed protocol addresses."""
 
     def __init__(self, w3=None):
-        self._w3 = w3
+        self._w3 = w3 if w3 is not None else get_w3()
 
     def _token_balance(self, token_sym: str, holder: str) -> float:
         """Returns token balance of holder in human-readable units."""
@@ -685,7 +777,7 @@ class FlashbotsPEG:
         try:
             from eth_account import Account
             from eth_account.messages import encode_defunct
-            w3 = Web3(Web3.HTTPProvider(RPC_ARB, request_kwargs={'timeout':10}))
+            w3 = get_w3() or Web3(Web3.HTTPProvider(RPC_ARB, request_kwargs={'timeout':10}))
             acc = Account.from_key(PRIV_KEY)
             profit_wei  = int(opp.profit_usd / eth_price * 1e18)
             builder_fee = int(profit_wei * 0.05)
@@ -694,7 +786,7 @@ class FlashbotsPEG:
                 'to': _w3_cs(CONTRACT),
                 'data': '0x',
                 'gas': 600_000, 'gasPrice': 0,
-                'nonce': nonce, 'chainId': 42161, 'value': 0
+                'nonce': nonce, 'chainId': CHAIN_ID, 'value': 0
             }
             signed  = acc.sign_transaction(tx)
             raw_tx  = getattr(signed, 'raw_transaction', None) or getattr(signed, 'rawTransaction', None)
@@ -718,7 +810,7 @@ class GelatoSubmitter:
         if not (CONTRACT and requests): return None
         try:
             r = requests.post(GELATO_RELAY, json={
-                'chainId':str(42161),'target':CONTRACT,
+                'chainId':str(CHAIN_ID),'target':CONTRACT,
                 'data':calldata,'feeToken':'0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE'
             }, timeout=10)
             return r.json().get('taskId')
@@ -820,6 +912,17 @@ class FlashDaemon:
 # ─────────────────────────────────────────────
 #  UI
 # ─────────────────────────────────────────────
+def _chain_line() -> str:
+    cs = chain_status()
+    if cs['connected']:
+        bal = f"  bal={C.BGREEN}{cs['balance_eth']:.5f} ETH{C.RESET}" if cs.get('balance_eth') is not None else ""
+        key = f"{C.BGREEN}keyed{C.RESET}" if cs['using_key'] else f"{C.YELLOW}public{C.RESET}"
+        return (f"  {C.BGREEN}● ON-CHAIN{C.RESET}  chain={C.BCYAN}{cs['chain_id']}{C.RESET}"
+                f"  block={C.CYAN}{cs['block']:,}{C.RESET}  gas={C.CYAN}{cs['gas_gwei']:.3f} gwei{C.RESET}"
+                f"  rpc={key}{bal}")
+    return (f"  {C.RED}● OFFLINE{C.RESET}  {C.DIM}{cs.get('error') or 'no RPC'}{C.RESET}"
+            f"  — set RPC_URL or ALCHEMY_ARB_KEY in ~/jdl/.env")
+
 def print_header():
     total  = RevenueTracker.total()
     execs  = RevenueTracker.count()
@@ -834,11 +937,12 @@ def print_header():
 ║{C.RESET}  💰 Revenue: {C.BGREEN}${total:>10.4f}{C.RESET}  [{pbar}] {pct:.0f}%          {C.CYAN}║
 ║{C.RESET}  🔍 Opps: {C.BYELLOW}{opps:>5}{C.RESET}  ✓ Execs: {C.BGREEN}{execs:>5}{C.RESET}  Status: {status}  {C.CYAN}║
 ║{C.RESET}  📌 Contract: {C.DIM}{(CONTRACT or 'not set — scan mode only')[:40]:<40}{C.RESET}{C.CYAN}║
-╚══════════════════════════════════════════════════════╝{C.RESET}
-""")
+╚══════════════════════════════════════════════════════╝{C.RESET}""")
+    print(_chain_line())
 
 def print_menu():
-    print(f"""{C.BOLD}  MAIN MENU{C.RESET}
+    print(f"""
+{C.BOLD}  MAIN MENU{C.RESET}
   {C.CYAN}[1]{C.RESET} Start Automation Engine
   {C.CYAN}[2]{C.RESET} Scan for Opportunities
   {C.CYAN}[3]{C.RESET} Gas Strategy Status
@@ -848,12 +952,15 @@ def print_menu():
   {C.CYAN}[7]{C.RESET} Configuration
   {C.CYAN}[8]{C.RESET} Run Tests
   {C.CYAN}[9]{C.RESET} Discover Flash Loan Protocols
+  {C.CYAN}[c]{C.RESET} Test On-Chain Connection
   {C.CYAN}[0]{C.RESET} Exit
 """)
 
 async def menu_run_daemon():
     clear()
     print(f"\n{C.BOLD}{C.CYAN}  ─── AUTOMATION ENGINE ───{C.RESET}\n")
+    print(_chain_line())
+    print()
     print(f"  {C.BYELLOW}Runs continuous scan + execute cycles with all algorithms.{C.RESET}")
     print(f"  Gas strategies rotate via UCB1 bandit learning.")
     print(f"  Profits auto-reinvest until ${WITHDRAW_THRESH:,.0f} threshold.")
@@ -881,7 +988,8 @@ async def menu_scan_now():
     scanner = OpportunityScanner(feed)
     eth_p   = feed.eth_price()
     gas_g   = feed.gas_gwei()
-    print(f"  ETH/USDC: {C.BYELLOW}${eth_p:,.2f}{C.RESET}   Gas: {C.CYAN}{gas_g:.3f} gwei{C.RESET}\n")
+    print(_chain_line())
+    print(f"\n  ETH/USDC: {C.BYELLOW}${eth_p:,.2f}{C.RESET}   Gas: {C.CYAN}{gas_g:.3f} gwei{C.RESET}\n")
     print(f"  {C.DIM}Scanning cross-DEX spreads (Uni V3 × Sushi) …{C.RESET}\n")
     found = 0
     for _ in range(10):
@@ -977,10 +1085,13 @@ def menu_status():
     opps  = db_query('SELECT COUNT(*) FROM opportunities')[0][0]
     print(f"  Revenue:  {C.BGREEN}${total:.4f}{C.RESET}   Execs: {C.BYELLOW}{execs}{C.RESET}   Opps: {C.CYAN}{opps}{C.RESET}")
     print()
+    print(f"  {C.BOLD}On-Chain{C.RESET}")
+    print(_chain_line())
+    print()
     print(f"  {C.BOLD}Config{C.RESET}")
     print(f"    Wallet:    {C.CYAN}{(WALLET[:16]+'...' if WALLET else 'not set')}{C.RESET}")
     print(f"    Contract:  {C.CYAN}{(CONTRACT[:16]+'...' if CONTRACT else 'not set — scan mode')}{C.RESET}")
-    print(f"    RPC:       {C.DIM}{'Alchemy' if ALCH_ARB else 'public'}{C.RESET}")
+    print(f"    RPC:       {C.DIM}{RPC_ARB}{C.RESET}")
     print(f"    Flashbots: {C.BGREEN if FB_SECRET else C.DIM}{'configured' if FB_SECRET else 'not set'}{C.RESET}")
     print(f"    Web3:      {C.BGREEN if WEB3_OK else C.RED}{'OK (v5 Termux-compat)' if WEB3_OK else 'not installed'}{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
@@ -989,22 +1100,25 @@ def menu_config():
     clear()
     print(f"\n{C.BOLD}{C.CYAN}  ─── CONFIGURATION ───{C.RESET}\n")
     env_path = os.path.expanduser('~/jdl/.env')
-    print(f"  .env: {C.BGREEN if os.path.exists(env_path) else C.RED}{env_path}{C.RESET}\n")
+    print(f"  .env: {C.BGREEN if os.path.exists(env_path) else C.RED}{env_path}{C.RESET}")
+    print(f"  RPC:  {C.DIM}{RPC_ARB}{C.RESET}\n")
+    print(_chain_line())
+    print()
     fields = [
-        ('WALLET_ADDRESS',        WALLET,      'Wallet address'),
-        ('PRIVATE_KEY',           '***' if PRIV_KEY else '', 'Private key'),
-        ('ALCHEMY_ARB_KEY',       '***' if ALCH_ARB else '', 'Alchemy Arbitrum key'),
-        ('FLASHBOTS_SECRET',      '***' if FB_SECRET else '', 'Flashbots signing key'),
-        ('FLASH_CONTRACT_ADDRESS', CONTRACT,   'Deployed FlashZeroGas.sol (optional)'),
+        ('PRIVATE_KEY',           '***' if PRIV_KEY else '', 'Wallet private key (required to execute)'),
+        ('WALLET_ADDRESS',        WALLET,      'Auto-derived from PRIVATE_KEY if blank'),
+        ('RPC_URL / ALCHEMY_ARB_KEY', 'set' if RPC_USING_KEY else '', 'Arbitrum RPC (public fallback if blank)'),
+        ('FLASHBOTS_SECRET',      '***' if FB_SECRET else '', 'Flashbots signing key (a.k.a. FLASHBOTS_AUTH_KEY)'),
+        ('FLASH_CONTRACT_ADDRESS', CONTRACT,   'Deployed FlashZeroGas.sol (optional — scan mode without)'),
         ('PAYMASTER_ADDRESS',     PAYMASTER,   'ProfitPaymaster.sol (optional)'),
-        ('GELATO_API_KEY',        '***' if GELATO_KEY else '', 'Gelato key (optional)'),
+        ('GELATO_API_KEY',        '***' if GELATO_KEY else '', 'Gelato relay key (optional)'),
     ]
-    print(f"  {'Variable':<30} {'Set?':<5} {'Description'}")
-    print(f"  {'─'*30} {'─'*5} {'─'*28}")
+    print(f"  {'Variable':<28} {'Set?':<5} {'Description'}")
+    print(f"  {'─'*28} {'─'*5} {'─'*34}")
     for var,val,desc in fields:
         ok = bool(val)
         sym = f"{C.BGREEN}YES{C.RESET}" if ok else f"{C.YELLOW}NO {C.RESET}"
-        print(f"  {C.CYAN}{var:<30}{C.RESET} {sym}  {C.DIM}{desc}{C.RESET}")
+        print(f"  {C.CYAN}{var:<28}{C.RESET} {sym}  {C.DIM}{desc}{C.RESET}")
     print(f"\n  Edit: {C.CYAN}nano ~/jdl/.env{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
@@ -1021,14 +1135,11 @@ async def menu_tests():
 async def menu_protocols():
     clear()
     print(f"\n{C.BOLD}{C.CYAN}  ─── DISCOVER FLASH LOAN PROTOCOLS ───{C.RESET}\n")
-    print(f"  {C.DIM}Querying Arbitrum One for deployed flash loan sources…{C.RESET}\n")
+    print(_chain_line())
+    print(f"\n  {C.DIM}Querying Arbitrum One for deployed flash loan sources…{C.RESET}\n")
     feed   = PriceFeed()
     eth_p  = feed.eth_price()
     finder = ProtocolFinder(feed._w3)
-
-    live = feed._w3 is not None
-    if not live:
-        print(f"  {C.YELLOW}No RPC connection — showing static protocol list (set ALCHEMY_ARB_KEY for live data){C.RESET}\n")
 
     sources = finder.discover(eth_p)
 
@@ -1060,12 +1171,56 @@ async def menu_protocols():
 """)
     input(f"  {C.DIM}Press ENTER…{C.RESET}")
 
+def menu_connection():
+    clear()
+    print(f"\n{C.BOLD}{C.CYAN}  ─── ON-CHAIN CONNECTION TEST ───{C.RESET}\n")
+    print(f"  RPC endpoint: {C.CYAN}{RPC_ARB}{C.RESET}")
+    print(f"  {C.DIM}Pinging chain (forcing fresh read)…{C.RESET}\n")
+    cs = chain_status(force=True)
+    if cs['connected']:
+        print(f"  {C.BGREEN}{C.BOLD}✓ CONNECTED{C.RESET}")
+        print(f"    Chain ID:    {C.BCYAN}{cs['chain_id']}{C.RESET}  "
+              f"{'(Arbitrum One ✓)' if cs['chain_id']==42161 else C.YELLOW+'(unexpected chain!)'+C.RESET}")
+        print(f"    Block:       {C.CYAN}{cs['block']:,}{C.RESET}")
+        print(f"    Gas price:   {C.CYAN}{cs['gas_gwei']:.4f} gwei{C.RESET}")
+        print(f"    RPC type:    {C.BGREEN+'keyed (Alchemy/custom)' if cs['using_key'] else C.YELLOW+'public node (rate-limited)'}{C.RESET}")
+        if WALLET:
+            if cs.get('balance_eth') is not None:
+                print(f"    Wallet:      {C.CYAN}{WALLET}{C.RESET}")
+                print(f"    ETH balance: {C.BGREEN}{cs['balance_eth']:.6f} ETH{C.RESET}  "
+                      f"{C.DIM}(zero is fine — PEG/Gelato pay gas){C.RESET}")
+            else:
+                print(f"    Wallet:      {C.CYAN}{WALLET}{C.RESET}  {C.DIM}(balance read failed){C.RESET}")
+        else:
+            print(f"    Wallet:      {C.YELLOW}not set — add PRIVATE_KEY to ~/jdl/.env{C.RESET}")
+        # Live protocol liquidity probe (proves contract reads work)
+        print(f"\n  {C.DIM}Probing Balancer V2 vault for live USDC liquidity…{C.RESET}")
+        finder = ProtocolFinder()
+        bal = finder._token_balance('USDC', PROTOCOLS['BALANCER_V2']['address'])
+        if bal > 0:
+            print(f"  {C.BGREEN}✓ Balancer V2 USDC liquidity: ${bal:,.0f}{C.RESET}  {C.DIM}(on-chain reads working){C.RESET}")
+        else:
+            print(f"  {C.YELLOW}⚠ Could not read token balance (RPC may be rate-limiting){C.RESET}")
+    else:
+        print(f"  {C.RED}{C.BOLD}✗ NOT CONNECTED{C.RESET}")
+        print(f"    Reason: {C.YELLOW}{cs.get('error') or 'unknown'}{C.RESET}\n")
+        print(f"  {C.BOLD}Fix:{C.RESET}")
+        if not WEB3_OK:
+            print(f"    • web3 not installed — run: {C.CYAN}pip install -r python/requirements_flash.txt{C.RESET}")
+        else:
+            print(f"    • Add to {C.CYAN}~/jdl/.env{C.RESET}:")
+            print(f"        {C.CYAN}ALCHEMY_ARB_KEY=your_key{C.RESET}   {C.DIM}(from alchemy.com → Arbitrum One){C.RESET}")
+            print(f"      or a full URL:")
+            print(f"        {C.CYAN}RPC_URL=https://arb-mainnet.g.alchemy.com/v2/your_key{C.RESET}")
+            print(f"    • The public node {C.DIM}arb1.arbitrum.io/rpc{C.RESET} is tried automatically but is rate-limited.")
+    input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
+
 async def main():
     init_db()
     while True:
         clear(); banner(); print_header(); print_menu()
         try:
-            choice = input("  Select option > ").strip()
+            choice = input("  Select option > ").strip().lower()
         except (KeyboardInterrupt, EOFError):
             print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
         if   choice == '1': await menu_run_daemon()
@@ -1077,6 +1232,7 @@ async def main():
         elif choice == '7': menu_config()
         elif choice == '8': await menu_tests()
         elif choice == '9': await menu_protocols()
+        elif choice == 'c': menu_connection()
         elif choice == '0': print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
         else: print(f"  {C.RED}Invalid option.{C.RESET}"); await asyncio.sleep(0.4)
 
