@@ -67,6 +67,12 @@ try:
                 from web3.middleware import ExtraDataToPOAMiddleware
                 w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
             except Exception: pass
+    def _send_raw(w3, raw):
+        try: return w3.eth.send_raw_transaction(raw)
+        except AttributeError: return w3.eth.sendRawTransaction(raw)
+    def _est_gas(w3, tx):
+        try: return w3.eth.estimate_gas(tx)
+        except AttributeError: return w3.eth.estimateGas(tx)
 except ImportError:
     WEB3_OK = False
     def _w3_cs(a): return a
@@ -77,6 +83,8 @@ except ImportError:
     def _balance(w, a): return 0
     def _is_connected(w): return False
     def _inject_poa(w): pass
+    def _send_raw(w, raw): return None
+    def _est_gas(w, tx): return 1_200_000
 
 load_dotenv(os.path.expanduser('~/jdl/.env'))
 
@@ -134,6 +142,23 @@ MIN_PROFIT_USD   = float(_env('MIN_PROFIT_USD', default='0.50') or '0.50')
 MAX_LOAN_USD     = 500_000.0
 WITHDRAW_THRESH  = 1_000.0
 CYCLE_SEC        = 15
+
+# Live execution gate: when off, the engine builds real calldata but never broadcasts.
+LIVE_EXEC = _env('LIVE_EXECUTION', 'LIVE_EXEC', default='').lower() in ('1','true','yes','on')
+
+# eth_abi: v3+ exposes encode(); web3 v5 ships eth_abi v2 with encode_abi().
+try:
+    from eth_abi import encode as _abi_encode
+except ImportError:
+    try:
+        from eth_abi import encode_abi as _abi_encode
+    except ImportError:
+        _abi_encode = None
+
+ZERO_ADDR  = '0x0000000000000000000000000000000000000000'
+# ArbitrageLib.SwapStep field order (MUST match contracts/ArbitrageLib.sol):
+#   protocol, pool, tokenIn, tokenOut, fee, minAmountOut, curveIndexIn, curveIndexOut, balancerPoolId
+_STEP_TUPLE = '(uint8,address,address,address,uint24,uint256,uint8,uint8,bytes32)'
 
 # ─────────────────────────────────────────────
 #  DEPLOYED FLASH LOAN PROTOCOLS — ARBITRUM ONE
@@ -784,8 +809,8 @@ class FlashbotsPEG:
             nonce = _nonce(w3, acc.address)
             tx = {
                 'to': _w3_cs(CONTRACT),
-                'data': '0x',
-                'gas': 600_000, 'gasPrice': 0,
+                'data': build_initiate_calldata(opp) or '0x',
+                'gas': 900_000, 'gasPrice': 0,
                 'nonce': nonce, 'chainId': CHAIN_ID, 'value': 0
             }
             signed  = acc.sign_transaction(tx)
@@ -818,6 +843,70 @@ class GelatoSubmitter:
             logging.warning(f'Gelato: {e}'); return None
 
 # ─────────────────────────────────────────────
+#  NEXUS FLASH RECEIVER — calldata builder + executor
+#  Targets contracts/NexusFlashReceiver.sol :: initiateFlashLoan
+# ─────────────────────────────────────────────
+def _selector(sig: str) -> bytes:
+    return Web3.keccak(text=sig)[:4] if WEB3_OK else b'\x00\x00\x00\x00'
+
+def build_swap_steps(opp: 'Opportunity') -> list:
+    """Build an ArbitrageLib.SwapStep[] round-trip route from an opportunity:
+    buy asset->intermediate, then sell intermediate->asset (both Uniswap V3)."""
+    amount     = int(opp.loan_usd * 1e6)            # USDC has 6 decimals
+    premium    = amount * 5 // 10000                # Aave V3 flash fee = 0.05%
+    min_profit = int(max(MIN_PROFIT_USD, 0.0) * 1e6)
+    floor_out  = amount + premium + min_profit      # final leg must clear loan+premium+profit
+    z = b'\x00' * 32
+    return [
+        # protocol=0 (UniV3); pool unused for UniV3 (router fixed in contract)
+        (0, ZERO_ADDR, _w3_cs(opp.asset),       _w3_cs(opp.token_inter), int(opp.buy_fee),  0,         0, 0, z),
+        (0, ZERO_ADDR, _w3_cs(opp.token_inter), _w3_cs(opp.asset),       int(opp.sell_fee), floor_out, 0, 0, z),
+    ]
+
+def build_initiate_calldata(opp: 'Opportunity') -> Optional[str]:
+    """ABI-encode NexusFlashReceiver.initiateFlashLoan(asset, amount, abi.encode(steps))."""
+    if not (WEB3_OK and _abi_encode):
+        return None
+    try:
+        amount        = int(opp.loan_usd * 1e6)
+        steps         = build_swap_steps(opp)
+        encoded_steps = _abi_encode([f'{_STEP_TUPLE}[]'], [steps])
+        args          = _abi_encode(['address', 'uint256', 'bytes'],
+                                    [_w3_cs(opp.asset), amount, encoded_steps])
+        return '0x' + (_selector('initiateFlashLoan(address,uint256,bytes)') + args).hex()
+    except Exception as e:
+        logging.warning(f'calldata: {e}')
+        return None
+
+class NexusExecutor:
+    """Broadcasts a real flash-loan arbitrage tx to NexusFlashReceiver on Arbitrum.
+    Atomic safety: an unprofitable encoded route reverts on-chain (only gas is lost)."""
+    def send(self, opp: 'Opportunity') -> Optional[str]:
+        if not (PRIV_KEY and CONTRACT and WEB3_OK and _abi_encode and requests is not None):
+            return None
+        try:
+            from eth_account import Account
+            w3   = get_w3()
+            acc  = Account.from_key(PRIV_KEY)
+            data = build_initiate_calldata(opp)
+            if not data:
+                return None
+            tx = {'to': _w3_cs(CONTRACT), 'from': acc.address, 'data': data,
+                  'nonce': _nonce(w3, acc.address), 'chainId': CHAIN_ID, 'value': 0}
+            try:
+                tx['gas'] = int(_est_gas(w3, tx) * 1.25)
+            except Exception:
+                tx['gas'] = 1_200_000
+            tx['gasPrice'] = _gas_p(w3)
+            signed = acc.sign_transaction(tx)
+            raw    = getattr(signed, 'raw_transaction', None) or getattr(signed, 'rawTransaction', None)
+            h      = _send_raw(w3, raw)
+            return h.hex() if hasattr(h, 'hex') else (str(h) if h else None)
+        except Exception as e:
+            logging.warning(f'NexusExecutor: {e}')
+            return None
+
+# ─────────────────────────────────────────────
 #  AUTOMATION DAEMON
 # ─────────────────────────────────────────────
 class FlashDaemon:
@@ -828,6 +917,7 @@ class FlashDaemon:
         self.qlearn  = QLearning()
         self.peg     = FlashbotsPEG()
         self.gelato  = GelatoSubmitter()
+        self.nexus   = NexusExecutor()
         self.finder  = ProtocolFinder(self.feed._w3)
         self.running = False
         self.cycle   = 0
@@ -861,13 +951,19 @@ class FlashDaemon:
         self.qlearn.ls = state; self.qlearn.la = arm
         print(f"  {C.DIM}    strategy={strategy}  arm={arm}{C.RESET}")
         tx_hash = None
+        mode    = 'SIM'
         try:
-            if strategy == 'FLASHBOTS_PEG':
-                tx_hash = self.peg.submit(opp, eth_p)
-            elif strategy == 'GELATO_FREE':
-                tx_hash = self.gelato.submit()
-            else:
+            if not (CONTRACT and WEB3_OK):
                 tx_hash = f'sim_{hashlib.md5(f"{time.time()}".encode()).hexdigest()[:16]}'
+                mode = 'SIM'
+            elif not LIVE_EXEC:
+                cd = build_initiate_calldata(opp)            # prove the calldata path
+                tx_hash = f'dry_{hashlib.md5((cd or str(time.time())).encode()).hexdigest()[:16]}'
+                mode = 'DRY'
+            elif strategy == 'FLASHBOTS_PEG' and CHAIN_ID == 1:
+                tx_hash = self.peg.submit(opp, eth_p); mode = 'LIVE'
+            else:
+                tx_hash = self.nexus.send(opp); mode = 'LIVE'  # direct Arbitrum broadcast
             net = RevenueTracker.log(
                 opp.type, strategy, opp.asset,
                 opp.loan_usd, opp.profit_usd, gas_usd,
@@ -882,7 +978,7 @@ class FlashDaemon:
             bar   = int(pct/5)
             pbar  = f"[{'#'*bar}{'.'*(20-bar)}]"
             if tx_hash:
-                print(f"  {C.BGREEN}  ✓ submitted{C.RESET}  hash={C.DIM}{(tx_hash or '')[:18]}...{C.RESET}  net={C.BYELLOW}${net:.3f}{C.RESET}")
+                print(f"  {C.BGREEN}  ✓ {mode}{C.RESET}  hash={C.DIM}{(tx_hash or '')[:18]}...{C.RESET}  net={C.BYELLOW}${net:.3f}{C.RESET}")
                 print(f"  {C.CYAN}  revenue {pbar} ${total:,.2f}/${WITHDRAW_THRESH:,.0f} ({pct:.1f}%){C.RESET}")
             else:
                 self.errors += 1
@@ -953,6 +1049,7 @@ def print_menu():
   {C.CYAN}[8]{C.RESET} Run Tests
   {C.CYAN}[9]{C.RESET} Discover Flash Loan Protocols
   {C.CYAN}[c]{C.RESET} Test On-Chain Connection
+  {C.CYAN}[x]{C.RESET} Build Execution Calldata (dry-run)
   {C.CYAN}[0]{C.RESET} Exit
 """)
 
@@ -966,6 +1063,10 @@ async def menu_run_daemon():
     print(f"  Profits auto-reinvest until ${WITHDRAW_THRESH:,.0f} threshold.")
     if not CONTRACT:
         print(f"  {C.YELLOW}No contract set — running in SCAN MODE (opportunities logged, not submitted).{C.RESET}")
+    elif not LIVE_EXEC:
+        print(f"  {C.YELLOW}LIVE_EXECUTION off — DRY-RUN: real calldata built, not broadcast.{C.RESET}")
+    else:
+        print(f"  {C.BGREEN}LIVE — broadcasting initiateFlashLoan txs to {CONTRACT[:12]}…{C.RESET}")
     print(f"  Press {C.BOLD}Ctrl+C{C.RESET} to stop.\n")
     try:
         raw = input(f"  Scan interval seconds [{CYCLE_SEC}]: ").strip()
@@ -1094,6 +1195,7 @@ def menu_status():
     print(f"    RPC:       {C.DIM}{RPC_ARB}{C.RESET}")
     print(f"    Flashbots: {C.BGREEN if FB_SECRET else C.DIM}{'configured' if FB_SECRET else 'not set'}{C.RESET}")
     print(f"    Web3:      {C.BGREEN if WEB3_OK else C.RED}{'OK (v5 Termux-compat)' if WEB3_OK else 'not installed'}{C.RESET}")
+    print(f"    Execution: {(C.BGREEN+'LIVE (broadcasting)') if LIVE_EXEC else (C.YELLOW+'dry-run (set LIVE_EXECUTION=1)')}{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 def menu_config():
@@ -1109,7 +1211,7 @@ def menu_config():
         ('WALLET_ADDRESS',        WALLET,      'Auto-derived from PRIVATE_KEY if blank'),
         ('RPC_URL / ALCHEMY_ARB_KEY', 'set' if RPC_USING_KEY else '', 'Arbitrum RPC (public fallback if blank)'),
         ('FLASHBOTS_SECRET',      '***' if FB_SECRET else '', 'Flashbots signing key (a.k.a. FLASHBOTS_AUTH_KEY)'),
-        ('FLASH_CONTRACT_ADDRESS', CONTRACT,   'Deployed FlashZeroGas.sol (optional — scan mode without)'),
+        ('FLASH_CONTRACT_ADDRESS', CONTRACT,   'Deployed NexusFlashReceiver / FlashZeroGas (optional)'),
         ('PAYMASTER_ADDRESS',     PAYMASTER,   'ProfitPaymaster.sol (optional)'),
         ('GELATO_API_KEY',        '***' if GELATO_KEY else '', 'Gelato relay key (optional)'),
     ]
@@ -1119,7 +1221,9 @@ def menu_config():
         ok = bool(val)
         sym = f"{C.BGREEN}YES{C.RESET}" if ok else f"{C.YELLOW}NO {C.RESET}"
         print(f"  {C.CYAN}{var:<28}{C.RESET} {sym}  {C.DIM}{desc}{C.RESET}")
-    print(f"\n  Edit: {C.CYAN}nano ~/jdl/.env{C.RESET}")
+    exec_line = f"{C.BGREEN}LIVE{C.RESET}" if LIVE_EXEC else f"{C.YELLOW}dry-run{C.RESET}"
+    print(f"\n  LIVE_EXECUTION: {exec_line}   {C.DIM}(1/true/yes/on to broadcast){C.RESET}")
+    print(f"  Edit: {C.CYAN}nano ~/jdl/.env{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 async def menu_tests():
@@ -1171,6 +1275,63 @@ async def menu_protocols():
 """)
     input(f"  {C.DIM}Press ENTER…{C.RESET}")
 
+def menu_build_calldata():
+    clear()
+    print(f"\n{C.BOLD}{C.CYAN}  ─── BUILD EXECUTION CALLDATA (DRY-RUN) ───{C.RESET}\n")
+    print(_chain_line()); print()
+    if not CONTRACT:
+        print(f"  {C.YELLOW}FLASH_CONTRACT_ADDRESS not set — deploy NexusFlashReceiver and set it in ~/jdl/.env{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    if not (WEB3_OK and _abi_encode):
+        print(f"  {C.RED}web3/eth_abi unavailable — pip install -r python/requirements_flash.txt{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    feed = PriceFeed(); scanner = OpportunityScanner(feed); opp = None
+    for _ in range(30):
+        opp = scanner.scan()
+        if opp: break
+    if not opp:
+        print(f"  {C.YELLOW}No opportunity surfaced this pass — try again.{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    amount = int(opp.loan_usd*1e6); premium = amount*5//10000
+    steps  = build_swap_steps(opp); data = build_initiate_calldata(opp)
+    print(f"  Target contract : {C.CYAN}{CONTRACT}{C.RESET}")
+    print(f"  Function        : {C.BWHITE}initiateFlashLoan(address,uint256,bytes){C.RESET}")
+    print(f"  Asset (USDC)    : {C.CYAN}{opp.asset}{C.RESET}")
+    print(f"  Loan amount     : {C.BYELLOW}{amount:,}{C.RESET} base units  ({C.DIM}${opp.loan_usd:,.0f}{C.RESET})")
+    print(f"  Aave premium    : {premium:,}  {C.DIM}(0.05%){C.RESET}")
+    print(f"\n  {C.BOLD}Route ({len(steps)} hops){C.RESET}")
+    for i,st in enumerate(steps):
+        print(f"    {i}: proto={st[0]}  {st[2][:8]}…→{st[3][:8]}…  fee={st[4]}  minOut={st[5]:,}")
+    if data:
+        print(f"\n  {C.BOLD}Encoded calldata{C.RESET} ({len(data)//2 - 1} bytes):")
+        print(f"  {C.DIM}{data[:138]}…{C.RESET}")
+    live = f"{C.BGREEN}ON{C.RESET}" if LIVE_EXEC else f"{C.YELLOW}OFF{C.RESET}"
+    print(f"\n  LIVE_EXECUTION: {live}   {C.DIM}(set LIVE_EXECUTION=1 in ~/jdl/.env to broadcast){C.RESET}")
+    print(f"  {C.DIM}Flash loans are atomic: an unprofitable route reverts on-chain (only gas lost).{C.RESET}")
+    input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
+
+async def main():
+    init_db()
+    while True:
+        clear(); banner(); print_header(); print_menu()
+        try:
+            choice = input("  Select option > ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
+        if   choice == '1': await menu_run_daemon()
+        elif choice == '2': await menu_scan_now()
+        elif choice == '3': menu_gas_strategies()
+        elif choice == '4': menu_revenue()
+        elif choice == '5': menu_algorithms()
+        elif choice == '6': menu_status()
+        elif choice == '7': menu_config()
+        elif choice == '8': await menu_tests()
+        elif choice == '9': await menu_protocols()
+        elif choice == 'c': menu_connection()
+        elif choice == 'x': menu_build_calldata()
+        elif choice == '0': print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
+        else: print(f"  {C.RED}Invalid option.{C.RESET}"); await asyncio.sleep(0.4)
+
 def menu_connection():
     clear()
     print(f"\n{C.BOLD}{C.CYAN}  ─── ON-CHAIN CONNECTION TEST ───{C.RESET}\n")
@@ -1193,7 +1354,6 @@ def menu_connection():
                 print(f"    Wallet:      {C.CYAN}{WALLET}{C.RESET}  {C.DIM}(balance read failed){C.RESET}")
         else:
             print(f"    Wallet:      {C.YELLOW}not set — add PRIVATE_KEY to ~/jdl/.env{C.RESET}")
-        # Live protocol liquidity probe (proves contract reads work)
         print(f"\n  {C.DIM}Probing Balancer V2 vault for live USDC liquidity…{C.RESET}")
         finder = ProtocolFinder()
         bal = finder._token_balance('USDC', PROTOCOLS['BALANCER_V2']['address'])
@@ -1214,27 +1374,6 @@ def menu_connection():
             print(f"        {C.CYAN}RPC_URL=https://arb-mainnet.g.alchemy.com/v2/your_key{C.RESET}")
             print(f"    • The public node {C.DIM}arb1.arbitrum.io/rpc{C.RESET} is tried automatically but is rate-limited.")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
-
-async def main():
-    init_db()
-    while True:
-        clear(); banner(); print_header(); print_menu()
-        try:
-            choice = input("  Select option > ").strip().lower()
-        except (KeyboardInterrupt, EOFError):
-            print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
-        if   choice == '1': await menu_run_daemon()
-        elif choice == '2': await menu_scan_now()
-        elif choice == '3': menu_gas_strategies()
-        elif choice == '4': menu_revenue()
-        elif choice == '5': menu_algorithms()
-        elif choice == '6': menu_status()
-        elif choice == '7': menu_config()
-        elif choice == '8': await menu_tests()
-        elif choice == '9': await menu_protocols()
-        elif choice == 'c': menu_connection()
-        elif choice == '0': print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
-        else: print(f"  {C.RED}Invalid option.{C.RESET}"); await asyncio.sleep(0.4)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.WARNING, format='%(levelname)s %(message)s')
