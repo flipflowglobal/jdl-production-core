@@ -64,12 +64,14 @@ interface IUniV3Oracle {
 }
 
 contract FlashZeroGas {
-    // ── State ────────────────────────────────────────────────────────────
+    // ── State ────────────────────────────────────────────────────────
     address public owner;
     address public constant AAVE_POOL_ARB  = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
     address public constant AAVE_POOL_ETH  = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address public constant BALANCER_VAULT = 0xBA12222222228d8Ba445958a75a0704d566BF2C8;
-    address public constant MORPHO_BLUE    = 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFc;
+    // Morpho Blue is deployed on Ethereum mainnet only — not on Arbitrum.
+    // Left as zero here so the Arbitrum build compiles; set before using Morpho on L1.
+    address public constant MORPHO_BLUE    = 0x0000000000000000000000000000000000000000;
     address public constant WETH_ARB       = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
     address public constant WETH_ETH       = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address public constant UNIV3_ROUTER   = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
@@ -91,7 +93,7 @@ contract FlashZeroGas {
     constructor() { owner = msg.sender; }
     receive() external payable {}
 
-    // ── Entry Points ─────────────────────────────────────────────────────
+    // ── Entry Points ───────────────────────────────────────────────
 
     function executeAaveFlash(
         address pool, address asset, uint256 amount,
@@ -129,7 +131,7 @@ contract FlashZeroGas {
             abi.encode(tokenInter,buyFee,sellFee,dexType,minProfit,builderFee,token,assets));
     }
 
-    // ── Callbacks ────────────────────────────────────────────────────────
+    // ── Callbacks ─────────────────────────────────────────────────
 
     function executeOperation(
         address asset, uint256 amount, uint256 premium,
@@ -189,7 +191,7 @@ contract FlashZeroGas {
         emit FlashExecuted(token,assets,profit-amount,"MORPHO_0FEE");
     }
 
-    // ── Novel Strategies ─────────────────────────────────────────────────
+    // ── Novel Strategies ───────────────────────────────────────────
 
     function recursiveFlashStack(
         address wethPool, uint256 wethForGas,
@@ -223,7 +225,7 @@ contract FlashZeroGas {
         );
     }
 
-    // ── Internal ─────────────────────────────────────────────────────────
+    // ── Internal ────────────────────────────────────────────────
 
     function _arb(
         address assetIn, uint256 amountIn,
@@ -255,6 +257,9 @@ contract FlashZeroGas {
     /// @notice PEG — Profit-Embedded Gas: block.coinbase paid from profit.
     ///         Submit tx with gasPrice=0 to Flashbots; builder accepts because
     ///         block.coinbase.transfer(fee) compensates them from inside the tx.
+    ///         NOTE: this is an Ethereum-L1 / Flashbots concept. On Arbitrum One
+    ///         there is no builder market — the sequencer orders txs — so pay the
+    ///         (sub-cent) gas normally or sponsor it via Gelato Relay.
     function _peg(uint256 builderFee, uint256 profitRaw) internal {
         address weth = block.chainid==1 ? WETH_ETH : WETH_ARB;
         if (builderFee>0 && IWETH(weth).balanceOf(address(this))>=builderFee) {
@@ -268,7 +273,7 @@ contract FlashZeroGas {
         emit GasReserved((profitRaw*gasReserveBps)/10000);
     }
 
-    // ── Withdrawal (threshold-gated) ─────────────────────────────────────
+    // ── Withdrawal (threshold-gated) ───────────────────────────────────
 
     function withdrawToken(address token, uint256 amount, address to) external onlyOwner {
         require(totalProfitRaw>=withdrawThresholdUSD6,"below threshold");
