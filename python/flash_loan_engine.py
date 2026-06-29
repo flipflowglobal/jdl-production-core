@@ -155,6 +155,15 @@ except ImportError:
     except ImportError:
         _abi_encode = None
 
+# Pure-python ABI encoding for our struct paths. eth-abi 2.x (pinned by web3 5)
+# is broken on Python 3.11+/parsimonious 0.11 for tuple types, so we never rely
+# on its grammar; these helpers are byte-identical to a correct eth-abi encode.
+_INIT_SELECTOR  = bytes.fromhex('e95437aa')  # initiateFlashLoan(address,uint256,bytes)
+_QUOTE_SELECTOR = bytes.fromhex('c6a5026a')  # quoteExactInputSingle((address,address,uint256,uint24,uint160))
+def _abi_w_uint(n) -> bytes: return int(n).to_bytes(32, 'big')
+def _abi_w_addr(a) -> bytes: return bytes(12) + bytes.fromhex(_w3_cs(a)[2:])
+def _abi_w_b32(b)  -> bytes: return b if len(b) == 32 else b.rjust(32, b'\x00')
+
 ZERO_ADDR  = '0x0000000000000000000000000000000000000000'
 # ArbitrageLib.SwapStep field order (MUST match contracts/ArbitrageLib.sol):
 #   protocol, pool, tokenIn, tokenOut, fee, minAmountOut, curveIndexIn, curveIndexOut, balancerPoolId
@@ -325,7 +334,7 @@ def banner():
   ╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
 {C.RESET}{C.BYELLOW}    Zero-Gas Flash Loan Arbitrage Engine v1.0
 {C.DIM}    PEG · Flashbots · GARCH · Kalman · UCB1 · Q-Learn{C.RESET}
-{C.CYAN}══════════════════════════════════════════════════════{C.RESET}
+{C.CYAN}═══════════════════════════════════════════════════════{C.RESET}
 """)
 
 # ─────────────────────────────────────────────
@@ -807,25 +816,26 @@ class OpportunityScanner:
 #  REAL UNISWAP V3 QUOTER  (live on-chain prices)
 # ─────────────────────────────────────────────
 class UniV3Quoter:
-    """Wraps Uniswap V3 QuoterV2.quoteExactInputSingle (called via eth_call)."""
+    """Uniswap V3 QuoterV2.quoteExactInputSingle via a raw eth_call with hand-rolled
+    calldata — avoids eth-abi tuple encoding (broken under web3 5 on Python 3.11+)."""
     def __init__(self, w3=None):
         self._w3 = w3 if w3 is not None else get_w3()
-        self._c  = None
-        if self._w3 and WEB3_OK:
-            try:
-                self._c = self._w3.eth.contract(address=_w3_cs(QUOTER_V2), abi=_QUOTER_ABI)
-            except Exception:
-                self._c = None
     def ready(self) -> bool:
-        return self._c is not None
+        return self._w3 is not None and WEB3_OK
     def quote(self, token_in: str, token_out: str, amount_in: int, fee: int) -> Optional[int]:
         """Exact-input single-hop quote. Returns amountOut (base units) or None."""
-        if not self._c:
+        if not (self._w3 and WEB3_OK):
             return None
         try:
-            params = (_w3_cs(token_in), _w3_cs(token_out), int(amount_in), int(fee), 0)
-            res = self._c.functions.quoteExactInputSingle(params).call()
-            return int(res[0]) if isinstance(res, (list, tuple)) else int(res)
+            data = '0x' + (_QUOTE_SELECTOR
+                           + _abi_w_addr(token_in) + _abi_w_addr(token_out)
+                           + _abi_w_uint(int(amount_in)) + _abi_w_uint(int(fee))
+                           + _abi_w_uint(0)).hex()
+            raw = self._w3.eth.call({'to': _w3_cs(QUOTER_V2), 'data': data})
+            raw = bytes(raw)
+            if not raw or len(raw) < 32:
+                return None
+            return int.from_bytes(raw[:32], 'big')   # amountOut is the first return word
         except Exception:
             return None
 
@@ -956,16 +966,21 @@ def build_swap_steps(opp: 'Opportunity') -> list:
     ]
 
 def build_initiate_calldata(opp: 'Opportunity') -> Optional[str]:
-    """ABI-encode NexusFlashReceiver.initiateFlashLoan(asset, amount, abi.encode(steps))."""
-    if not (WEB3_OK and _abi_encode):
+    """ABI-encode NexusFlashReceiver.initiateFlashLoan(asset, amount, abi.encode(steps)).
+    Hand-rolled (pure python) so it works under web3 5's eth-abi 2.x on Python 3.11+."""
+    if not WEB3_OK:
         return None
     try:
-        amount        = int(opp.loan_usd * 1e6)
-        steps         = build_swap_steps(opp)
-        encoded_steps = _abi_encode([f'{_STEP_TUPLE}[]'], [steps])
-        args          = _abi_encode(['address', 'uint256', 'bytes'],
-                                    [_w3_cs(opp.asset), amount, encoded_steps])
-        return '0x' + (_selector('initiateFlashLoan(address,uint256,bytes)') + args).hex()
+        amount = int(opp.loan_usd * 1e6)
+        steps  = build_swap_steps(opp)
+        def _enc_step(st):
+            p, pool, ti, to, fee, mo, ci, co, bp = st
+            return (_abi_w_uint(p) + _abi_w_addr(pool) + _abi_w_addr(ti) + _abi_w_addr(to) +
+                    _abi_w_uint(fee) + _abi_w_uint(mo) + _abi_w_uint(ci) + _abi_w_uint(co) + _abi_w_b32(bp))
+        enc_steps = _abi_w_uint(0x20) + _abi_w_uint(len(steps)) + b''.join(_enc_step(s) for s in steps)
+        enc_bytes = _abi_w_uint(len(enc_steps)) + enc_steps + b'\x00' * ((-len(enc_steps)) % 32)
+        args = _abi_w_addr(opp.asset) + _abi_w_uint(amount) + _abi_w_uint(0x60) + enc_bytes
+        return '0x' + (_INIT_SELECTOR + args).hex()
     except Exception as e:
         logging.warning(f'calldata: {e}')
         return None
@@ -974,7 +989,7 @@ class NexusExecutor:
     """Broadcasts a real flash-loan arbitrage tx to NexusFlashReceiver on Arbitrum.
     Atomic safety: an unprofitable encoded route reverts on-chain (only gas is lost)."""
     def send(self, opp: 'Opportunity') -> Optional[str]:
-        if not (PRIV_KEY and CONTRACT and WEB3_OK and _abi_encode and requests is not None):
+        if not (PRIV_KEY and CONTRACT and WEB3_OK and requests is not None):
             return None
         try:
             from eth_account import Account
@@ -1383,14 +1398,14 @@ def menu_build_calldata():
     if not CONTRACT:
         print(f"  {C.YELLOW}FLASH_CONTRACT_ADDRESS not set — deploy NexusFlashReceiver and set it in ~/jdl/.env{C.RESET}")
         input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
-    if not (WEB3_OK and _abi_encode):
-        print(f"  {C.RED}web3/eth_abi unavailable — pip install -r python/requirements_flash.txt{C.RESET}")
+    if not WEB3_OK:
+        print(f"  {C.RED}web3 unavailable — pip install -r python/requirements_flash.txt{C.RESET}")
         input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
     feed = PriceFeed()
     if USE_REAL_QUOTES:
         rqs = RealQuoteScanner(feed); opp = rqs.scan(REAL_LOAN_USD) if rqs.ready() else None
         if not opp:
-            print(f"  {C.YELLOW}No profitable real-quote edge right now (efficient market). Showing nothing to build.{C.RESET}")
+            print(f"  {C.YELLOW}No profitable real-quote edge right now (efficient market). Nothing to build.{C.RESET}")
             input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
     else:
         scanner = OpportunityScanner(feed); opp = None
