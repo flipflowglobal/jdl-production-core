@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-╔═══════════════════════════════════════════════════════════════╗
+╔══════════════════════════════════════════════════════════════╗
 ║         FLASH LOAN AUTOMATION ENGINE v1.0                     ║
 ║         Zero-Gas · Self-Funding · Auto-Reinvest               ║
 ║         Terminal-Ready | UserLAnd Compatible                  ║
@@ -36,8 +36,7 @@ try:
     from web3 import Web3
     from web3.middleware import geth_poa_middleware
     WEB3_OK = True
-    # ─ web3 v5/v6 compatibility shims ──────────────────────────────
-    # web3 v5 uses camelCase; v6 uses snake_case. Try v6 first, fall back to v5.
+    # ─ web3 v5/v6 compatibility shims ──────────────────────────────────
     def _w3_cs(addr: str) -> str:
         try: return Web3.to_checksum_address(addr)
         except AttributeError: return Web3.toChecksumAddress(addr)
@@ -90,6 +89,67 @@ MAX_LOAN_USD     = 500_000.0
 WITHDRAW_THRESH  = 1_000.0
 CYCLE_SEC        = 15
 
+# ─────────────────────────────────────────────
+#  DEPLOYED FLASH LOAN PROTOCOLS — ARBITRUM ONE
+#  No custom contract needed — system uses these directly.
+# ─────────────────────────────────────────────
+PROTOCOLS: Dict[str, dict] = {
+    'BALANCER_V2': {
+        'address': '0xBA12222222228d8Ba445958a75a0704d566BF2C8',
+        'fee_bps':  0,
+        'type':    'balancer',
+        'tokens':  ['USDC','WETH','WBTC','DAI','USDT'],
+        'desc':    'Balancer V2 Vault  (0% fee)',
+    },
+    'AAVE_V3': {
+        'address': '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+        'fee_bps':  9,
+        'type':    'aave',
+        'tokens':  ['USDC','WETH','WBTC','DAI','USDT','ARB'],
+        'desc':    'Aave V3 Pool  (0.09% fee)',
+    },
+    'RADIANT': {
+        'address': '0xF4B1486DD74D07706052A33d31d7c0AAFD0659E1',
+        'fee_bps':  9,
+        'type':    'aave',
+        'tokens':  ['USDC','WETH','WBTC'],
+        'desc':    'Radiant Capital  (0.09% fee, Aave-fork)',
+    },
+    'UNI_V3_USDC_WETH_005': {
+        'address': '0xC6962004f452bE9203591991D15f6b388e09E8D0',
+        'fee_bps':  5,
+        'type':    'uniswap_v3',
+        'tokens':  ['USDC','WETH'],
+        'desc':    'Uniswap V3 USDC/WETH 0.05%',
+    },
+    'UNI_V3_WBTC_WETH_030': {
+        'address': '0x2f5e87C9312fa29aed5c179E456625D79015299c',
+        'fee_bps': 30,
+        'type':    'uniswap_v3',
+        'tokens':  ['WBTC','WETH'],
+        'desc':    'Uniswap V3 WBTC/WETH 0.30%',
+    },
+    'UNI_V3_USDC_WETH_030': {
+        'address': '0x17c14D2c404D167802b16C450d3c99F88F2c4F4d',
+        'fee_bps': 30,
+        'type':    'uniswap_v3',
+        'tokens':  ['USDC','WETH'],
+        'desc':    'Uniswap V3 USDC/WETH 0.30%',
+    },
+}
+
+# token addresses on Arbitrum One
+_TOKEN_ADDR = {
+    'USDC': '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8',
+    'WETH': '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+    'WBTC': '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f',
+    'DAI':  '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1',
+    'USDT': '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+    'ARB':  '0x912CE59144191C1204E64559FE8253a0e49E6548',
+}
+_ERC20_ABI = json.loads('[{"inputs":[{"type":"address"}],"name":"balanceOf","outputs":[{"type":"uint256"}],"stateMutability":"view","type":"function"}]')
+_TOKEN_DEC = {'USDC':6,'USDT':6,'WBTC':8,'WETH':18,'DAI':18,'ARB':18}
+
 DATA_DIR = Path.home() / '.flash_loan_engine'
 DB_PATH  = DATA_DIR / 'flash.db'
 
@@ -127,7 +187,7 @@ def banner():
   ███████╗██╗      █████╗ ███████╗██╗  ██╗
   ██╔════╝██║     ██╔══██╗██╔════╝██║  ██║
   █████╗  ██║     ███████║███████╗███████║
-  ██╔══╝  ██║     ██╔══██║╚════██║██╔══██║
+  ██╔══╝  ██║     ██╔══██║╚════██╗██╔══██║
   ██║     ███████╗██║  ██║███████║██║  ██║
   ╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
 {C.RESET}{C.BYELLOW}    Zero-Gas Flash Loan Arbitrage Engine v1.0
@@ -325,8 +385,9 @@ class BellmanFordArb:
         for _ in range(n-1):
             for u,v,w in edges:
                 if dist[u]+w < dist[v]: dist[v]=dist[u]+w; pred[v]=u
+        EPS = 1e-9
         for u,v,w in edges:
-            if dist[u]!=float('inf') and dist[u]+w < dist[v]:
+            if dist[u]!=float('inf') and dist[u]+w < dist[v]-EPS:
                 path=[]; vis=set(); ci=v
                 while ci not in vis: vis.add(ci); path.append(ci); ci=pred[ci]
                 path.append(ci); path.reverse()
@@ -461,6 +522,72 @@ class PriceFeed:
         return self.gas_gwei() * gas_units * 1e-9 * self.eth_price()
 
 # ─────────────────────────────────────────────
+#  PROTOCOL FINDER
+#  Discovers available flash loan sources on-chain.
+#  Works with no custom contract deployed.
+# ─────────────────────────────────────────────
+class ProtocolFinder:
+    """Query Arbitrum One for available flash loan pools.
+    No custom contract required — reads balances from already-deployed protocol addresses."""
+
+    def __init__(self, w3=None):
+        self._w3 = w3
+
+    def _token_balance(self, token_sym: str, holder: str) -> float:
+        """Returns token balance of holder in human-readable units."""
+        if not (self._w3 and WEB3_OK):
+            return -1.0
+        addr = _TOKEN_ADDR.get(token_sym)
+        if not addr:
+            return -1.0
+        try:
+            c = self._w3.eth.contract(address=_w3_cs(addr), abi=_ERC20_ABI)
+            raw = c.functions.balanceOf(_w3_cs(holder)).call()
+            dec = _TOKEN_DEC.get(token_sym, 18)
+            return raw / (10 ** dec)
+        except Exception:
+            return -1.0
+
+    def _score(self, fee_bps: int, usdc_liq: float) -> float:
+        fee_score = (100 - fee_bps) * 0.6
+        liq_score = min(usdc_liq / 1_000_000, 10.0) * 40.0
+        return fee_score + liq_score
+
+    def discover(self, eth_price: float = 2000.0) -> List[dict]:
+        """Query each protocol and return results ranked by score (lower fee + higher liquidity)."""
+        results = []
+        for name, cfg in PROTOCOLS.items():
+            entry = {
+                'name':         name,
+                'desc':         cfg['desc'],
+                'fee_bps':      cfg['fee_bps'],
+                'type':         cfg['type'],
+                'address':      cfg['address'],
+                'tokens':       cfg['tokens'],
+                'liquidity':    {},
+                'available':    True,
+                'live':         False,
+            }
+            usdc_liq = 0.0
+            if self._w3 and WEB3_OK:
+                for sym in cfg['tokens'][:4]:
+                    bal = self._token_balance(sym, cfg['address'])
+                    if bal >= 0:
+                        entry['liquidity'][sym] = bal
+                        entry['live'] = True
+                usdc_liq = entry['liquidity'].get('USDC', 0.0)
+                weth_liq = entry['liquidity'].get('WETH', 0.0)
+                entry['available'] = usdc_liq > 500 or weth_liq > 0.1
+            entry['score'] = self._score(cfg['fee_bps'], usdc_liq)
+            results.append(entry)
+        results.sort(key=lambda x: x['score'], reverse=True)
+        return results
+
+    def best(self, eth_price: float = 2000.0) -> dict:
+        sources = self.discover(eth_price)
+        return sources[0] if sources else PROTOCOLS['BALANCER_V2']
+
+# ─────────────────────────────────────────────
 #  OPPORTUNITY SCANNER
 # ─────────────────────────────────────────────
 GAS_STRATEGIES = [
@@ -481,6 +608,7 @@ class Opportunity:
     vol:         float
     kelly_frac:  float
     spread:      float = 0.0
+    source:      str   = 'BALANCER_V2'
 
 class OpportunityScanner:
     def __init__(self, feed: PriceFeed):
@@ -543,7 +671,8 @@ class OpportunityScanner:
             token_inter='0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
             loan_usd=sized, profit_usd=s_prof,
             buy_fee=500, sell_fee=3000, dex_type=1,
-            vol=vol, kelly_frac=kf, spread=spread
+            vol=vol, kelly_frac=kf, spread=spread,
+            source='BALANCER_V2'
         )
 
 # ─────────────────────────────────────────────
@@ -607,6 +736,7 @@ class FlashDaemon:
         self.qlearn  = QLearning()
         self.peg     = FlashbotsPEG()
         self.gelato  = GelatoSubmitter()
+        self.finder  = ProtocolFinder(self.feed._w3)
         self.running = False
         self.cycle   = 0
         self.errors  = 0
@@ -628,7 +758,8 @@ class FlashDaemon:
               f"  profit={C.BYELLOW}${opp.profit_usd:.3f}{C.RESET}"
               f"  loan={C.BCYAN}${opp.loan_usd:,.0f}{C.RESET}"
               f"  vol={opp.vol*100:.2f}%"
-              f"  kelly={opp.kelly_frac*100:.1f}%")
+              f"  kelly={opp.kelly_frac*100:.1f}%"
+              f"  src={C.DIM}{opp.source}{C.RESET}")
         arm      = self.bandit.choose()
         strategy = GAS_STRATEGIES[arm]
         hv = self.scanner.garch.high_vol()
@@ -695,14 +826,14 @@ def print_header():
     opps   = db_query("SELECT COUNT(*) FROM opportunities")[0][0]
     pct    = min(total/WITHDRAW_THRESH*100,100)
     bar    = int(pct/5); pbar=f"{'#'*bar}{'.'*(20-bar)}"
-    status = f"{C.BGREEN}RUNNING{C.RESET}" if CONTRACT else f"{C.BYELLOW}NO CONTRACT{C.RESET}"
+    status = f"{C.BGREEN}RUNNING{C.RESET}" if CONTRACT else f"{C.BYELLOW}SCAN MODE{C.RESET}"
     print(f"""
 {C.CYAN}╔══════════════════════════════════════════════════════╗
 ║{C.BWHITE}{C.BOLD}  FLASH LOAN ENGINE v1.0  ·  Zero-Gas Auto-Arb         {C.RESET}{C.CYAN}║
 ╠══════════════════════════════════════════════════════╣
 ║{C.RESET}  💰 Revenue: {C.BGREEN}${total:>10.4f}{C.RESET}  [{pbar}] {pct:.0f}%          {C.CYAN}║
 ║{C.RESET}  🔍 Opps: {C.BYELLOW}{opps:>5}{C.RESET}  ✓ Execs: {C.BGREEN}{execs:>5}{C.RESET}  Status: {status}  {C.CYAN}║
-║{C.RESET}  📌 Contract: {C.DIM}{(CONTRACT or 'not set')[:40]:<40}{C.RESET}{C.CYAN}║
+║{C.RESET}  📌 Contract: {C.DIM}{(CONTRACT or 'not set — scan mode only')[:40]:<40}{C.RESET}{C.CYAN}║
 ╚══════════════════════════════════════════════════════╝{C.RESET}
 """)
 
@@ -716,6 +847,7 @@ def print_menu():
   {C.CYAN}[6]{C.RESET} System Status
   {C.CYAN}[7]{C.RESET} Configuration
   {C.CYAN}[8]{C.RESET} Run Tests
+  {C.CYAN}[9]{C.RESET} Discover Flash Loan Protocols
   {C.CYAN}[0]{C.RESET} Exit
 """)
 
@@ -725,6 +857,8 @@ async def menu_run_daemon():
     print(f"  {C.BYELLOW}Runs continuous scan + execute cycles with all algorithms.{C.RESET}")
     print(f"  Gas strategies rotate via UCB1 bandit learning.")
     print(f"  Profits auto-reinvest until ${WITHDRAW_THRESH:,.0f} threshold.")
+    if not CONTRACT:
+        print(f"  {C.YELLOW}No contract set — running in SCAN MODE (opportunities logged, not submitted).{C.RESET}")
     print(f"  Press {C.BOLD}Ctrl+C{C.RESET} to stop.\n")
     try:
         raw = input(f"  Scan interval seconds [{CYCLE_SEC}]: ").strip()
@@ -756,7 +890,8 @@ async def menu_scan_now():
             found += 1
             print(f"  {C.BGREEN}✓{C.RESET} {opp.type:<22} profit={C.BYELLOW}${opp.profit_usd:.4f}{C.RESET}"
                   f"  loan={C.CYAN}${opp.loan_usd:,.0f}{C.RESET}"
-                  f"  vol={opp.vol*100:.2f}%  spread={opp.spread*100:.3f}%")
+                  f"  vol={opp.vol*100:.2f}%  spread={opp.spread*100:.3f}%"
+                  f"  src={C.DIM}{opp.source}{C.RESET}")
         else:
             print(f"  {C.DIM}—  no edge{C.RESET}")
         await asyncio.sleep(0.1)
@@ -844,7 +979,7 @@ def menu_status():
     print()
     print(f"  {C.BOLD}Config{C.RESET}")
     print(f"    Wallet:    {C.CYAN}{(WALLET[:16]+'...' if WALLET else 'not set')}{C.RESET}")
-    print(f"    Contract:  {C.CYAN}{(CONTRACT[:16]+'...' if CONTRACT else 'not set')}{C.RESET}")
+    print(f"    Contract:  {C.CYAN}{(CONTRACT[:16]+'...' if CONTRACT else 'not set — scan mode')}{C.RESET}")
     print(f"    RPC:       {C.DIM}{'Alchemy' if ALCH_ARB else 'public'}{C.RESET}")
     print(f"    Flashbots: {C.BGREEN if FB_SECRET else C.DIM}{'configured' if FB_SECRET else 'not set'}{C.RESET}")
     print(f"    Web3:      {C.BGREEN if WEB3_OK else C.RED}{'OK (v5 Termux-compat)' if WEB3_OK else 'not installed'}{C.RESET}")
@@ -860,7 +995,7 @@ def menu_config():
         ('PRIVATE_KEY',           '***' if PRIV_KEY else '', 'Private key'),
         ('ALCHEMY_ARB_KEY',       '***' if ALCH_ARB else '', 'Alchemy Arbitrum key'),
         ('FLASHBOTS_SECRET',      '***' if FB_SECRET else '', 'Flashbots signing key'),
-        ('FLASH_CONTRACT_ADDRESS', CONTRACT,   'Deployed FlashZeroGas.sol'),
+        ('FLASH_CONTRACT_ADDRESS', CONTRACT,   'Deployed FlashZeroGas.sol (optional)'),
         ('PAYMASTER_ADDRESS',     PAYMASTER,   'ProfitPaymaster.sol (optional)'),
         ('GELATO_API_KEY',        '***' if GELATO_KEY else '', 'Gelato key (optional)'),
     ]
@@ -883,6 +1018,48 @@ async def menu_tests():
         print(f"  {C.RED}test_flash_engine.py not found in python/ directory.{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
+async def menu_protocols():
+    clear()
+    print(f"\n{C.BOLD}{C.CYAN}  ─── DISCOVER FLASH LOAN PROTOCOLS ───{C.RESET}\n")
+    print(f"  {C.DIM}Querying Arbitrum One for deployed flash loan sources…{C.RESET}\n")
+    feed   = PriceFeed()
+    eth_p  = feed.eth_price()
+    finder = ProtocolFinder(feed._w3)
+
+    live = feed._w3 is not None
+    if not live:
+        print(f"  {C.YELLOW}No RPC connection — showing static protocol list (set ALCHEMY_ARB_KEY for live data){C.RESET}\n")
+
+    sources = finder.discover(eth_p)
+
+    print(f"  {'#':<3} {'Protocol':<30} {'Fee':>5} {'USDC Liq':>12} {'WETH Liq':>10} {'Score':>7} {'Live'}")
+    print(f"  {'─'*3} {'─'*30} {'─'*5} {'─'*12} {'─'*10} {'─'*7} {'─'*4}")
+    for i, s in enumerate(sources, 1):
+        usdc = s['liquidity'].get('USDC', 0.0)
+        weth = s['liquidity'].get('WETH', 0.0)
+        fee_str = f"{s['fee_bps']/100:.2f}%" if s['fee_bps'] > 0 else f"{C.BGREEN}FREE{C.RESET}"
+        live_sym = f"{C.BGREEN}✓{C.RESET}" if s['live'] else f"{C.DIM}?{C.RESET}"
+        avail_col = C.BGREEN if s['available'] else C.DIM
+        usdc_str = f"${usdc:>10,.0f}" if usdc > 0 else f"{C.DIM}{'unknown':>10}{C.RESET}"
+        weth_str = f"{weth:>9.2f}" if weth > 0 else f"{C.DIM}{'unknown':>9}{C.RESET}"
+        print(f"  {C.CYAN}{i:<3}{C.RESET} {avail_col}{s['desc']:<30}{C.RESET} {fee_str:>5}  {usdc_str}  {weth_str}  {s['score']:>7.1f}  {live_sym}")
+
+    print(f"\n  {C.BOLD}Best source:{C.RESET} {C.BGREEN}{sources[0]['desc']}{C.RESET}  "
+          f"(fee {sources[0]['fee_bps']/100:.2f}%)")
+    print(f"  Address: {C.CYAN}{sources[0]['address']}{C.RESET}")
+    print(f"  Tokens:  {C.DIM}{', '.join(sources[0]['tokens'])}{C.RESET}")
+
+    print(f"""
+  {C.BOLD}How flash loans work without a funded wallet:{C.RESET}
+  {C.DIM}1. Borrow from protocol (e.g. Balancer V2 at 0% fee){C.RESET}
+  {C.DIM}2. Execute arbitrage swap — profit stays in the callback{C.RESET}
+  {C.DIM}3. Repay loan + fee from profit — net gain kept{C.RESET}
+  {C.DIM}4. Gas paid via Gelato relay (free) or embedded in profit (PEG){C.RESET}
+  {C.BYELLOW}  → Set FLASH_CONTRACT_ADDRESS in .env to go live.{C.RESET}
+  {C.BYELLOW}  → Until then, system runs in scan mode (logging opps).{C.RESET}
+""")
+    input(f"  {C.DIM}Press ENTER…{C.RESET}")
+
 async def main():
     init_db()
     while True:
@@ -899,6 +1076,7 @@ async def main():
         elif choice == '6': menu_status()
         elif choice == '7': menu_config()
         elif choice == '8': await menu_tests()
+        elif choice == '9': await menu_protocols()
         elif choice == '0': print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
         else: print(f"  {C.RED}Invalid option.{C.RESET}"); await asyncio.sleep(0.4)
 
