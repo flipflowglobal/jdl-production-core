@@ -13,7 +13,9 @@ import os
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+# Put python/ (the package parent) on the path so `jdl_flash.*` resolves when
+# this file is run directly (python jdl_flash/test_flash_engine.py).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 class C:
     RESET=  "\033[0m"; BOLD=   "\033[1m"; DIM=    "\033[2m"
@@ -43,7 +45,7 @@ def section(title: str):
     print(f"\n  {C.CYAN}{C.BOLD}── {title} ──{C.RESET}")
 
 try:
-    from flash_loan_engine import (
+    from jdl_flash.flash_loan_engine import (
         GARCH11, KalmanPrice, OrnsteinUhlenbeck, KellyCriterion,
         NewtonRaphsonAMM, BellmanFordArb, UCB1Bandit, QLearning,
         FourierCycle, EMAWeights, ZScoreDetector,
@@ -300,7 +302,7 @@ def test_advanced_integration():
     # Build an AdvancedEngine with a deterministic in-memory quoter (no RPC needed)
     # so the wiring (adapter + optimizer + triangular + guard) is verified offline.
     adv = AdvancedEngine.__new__(AdvancedEngine)
-    from flash_loan_engine import PatternRecognition, MarketAnalysis
+    from jdl_flash.flash_loan_engine import PatternRecognition, MarketAnalysis
     adv.guard = RealnessGuard(); adv.pat = PatternRecognition(); adv.mkt = MarketAnalysis()
 
     class _Q:

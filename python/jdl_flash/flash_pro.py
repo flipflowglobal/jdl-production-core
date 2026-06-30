@@ -10,14 +10,14 @@ All modules use stdlib only; real values only; dependency-injected for paralleli
 import os
 import sys
 from typing import Dict, List, Optional, Any, Callable
-from advanced_math import AdvancedMath, ewma, zscore, softmax, sigmoid, logit, sma, ema, stddev, covariance, correlation
-from pattern_recognition import PatternRecognition
-from market_analysis import MarketAnalysis
-from prediction import OnlineAR, RidgeForecaster, EdgeClassifier, EWMAForecast, ConfidenceScorer
-from loan_optimizer import LoanOptimizer
-from triangular_scanner import TriangularScanner
-from bot_swarm import BotSwarm
-from realness_guard import RealnessGuard, SystemDoctor, safe, retry
+from jdl_flash.advanced_math import AdvancedMath, ewma, zscore, softmax, sigmoid, logit, sma, ema, stddev, covariance, correlation
+from jdl_flash.pattern_recognition import PatternRecognition
+from jdl_flash.market_analysis import MarketAnalysis
+from jdl_flash.prediction import OnlineAR, RidgeForecaster, EdgeClassifier, EWMAForecast, ConfidenceScorer
+from jdl_flash.loan_optimizer import LoanOptimizer
+from jdl_flash.triangular_scanner import TriangularScanner
+from jdl_flash.bot_swarm import BotSwarm
+from jdl_flash.realness_guard import RealnessGuard, SystemDoctor, safe, retry
 
 __all__ = ["FlashPro", "main"]
 
