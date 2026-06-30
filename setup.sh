@@ -151,7 +151,14 @@ PIP_FLAGS="--quiet"
 
 pip install $PIP_FLAGS --upgrade pip
 pip install $PIP_FLAGS -r "$SCRIPT_DIR/python/requirements_flash.txt"
-ok "Dependencies installed (web3 6.x, aiohttp, dotenv, hexbytes)"
+# CRITICAL: web3 5.31.4 ships parsimonious 0.8.x (`from inspect import getargspec`),
+# removed in Python 3.9+ → `import web3` crashes and the engine says
+# "web3 not installed". Override it (can't be a normal pin: eth-abi 2.2.0 caps
+# parsimonious<0.9.0). --no-deps avoids re-triggering the resolver.
+pip install $PIP_FLAGS --no-deps --upgrade 'parsimonious>=0.10'
+# Install the package so the `flashloan` command is available everywhere.
+pip install $PIP_FLAGS -e "$SCRIPT_DIR/python"
+ok "Dependencies installed (web3 5.31.4 + parsimonious fix); 'flashloan' command ready"
 
 # ── 4. Data directory ────────────────────────────────────────
 step "Creating data directory at $DATA_DIR..."

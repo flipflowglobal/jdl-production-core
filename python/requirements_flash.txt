@@ -1,5 +1,15 @@
-web3>=6.0.0,<7.0.0
+# Termux/Android-safe pins for the flash-loan engine (no Rust toolchain needed).
+# web3 5.31.4 is the last pure-Python-friendly line; the engine hand-rolls ABI
+# encoding so it never needs eth-abi's tuple grammar.
+web3==5.31.4
 requests>=2.31.0
 python-dotenv>=1.0.0
 aiohttp>=3.9.0
 hexbytes>=0.3.0
+
+# AFTER installing the above, run ONE more command (it can't go here — eth-abi
+# 2.2.0 pins parsimonious<0.9.0, which would make pip refuse to resolve):
+#     pip install --no-deps --upgrade 'parsimonious>=0.10'
+# Why: web3 5.31.4 → parsimonious 0.8.x does `from inspect import getargspec`,
+# removed in Python 3.9+, so `import web3` crashes on modern Python / Termux 3.13
+# and the engine shows "web3 not installed". 0.10+ fixes the import.
