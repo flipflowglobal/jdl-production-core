@@ -587,7 +587,7 @@ Gelato sponsors gas → First flash loan executes → Profit generated
 
 ```bash
 source ~/.flash_venv/bin/activate
-python3 python/flash_loan_engine.py
+flashloan
 # Select [1] Start Daemon → the UCB1 bandit selects GelatoFreeRelay for round 1
 ```
 
@@ -600,11 +600,18 @@ python3 python/flash_loan_engine.py
 
 ## Running the Engine
 
-### Start the interactive terminal UI
+### One-time install (makes the `flashloan` command available anywhere)
 
 ```bash
 source ~/.flash_venv/bin/activate
-python3 python/flash_loan_engine.py
+pip install -e python/          # installs the jdl_flash package + the flashloan command
+```
+
+### Start the interactive terminal UI
+
+```bash
+flashloan                       # runs from ANY directory after the install above
+# equivalent: python3 -m jdl_flash.flash_loan_engine
 ```
 
 You will see the FLASH ASCII banner and this menu:
@@ -789,7 +796,7 @@ screen -r flash
 ```bash
 tmux new-session -s flash
 source ~/.flash_venv/bin/activate
-python3 python/flash_loan_engine.py
+flashloan
 # Detach: Ctrl+B then D
 # Reattach: tmux attach -t flash
 ```

@@ -42,7 +42,8 @@ class DaemonProc:
     def start(self):
         DATA_DIR.mkdir(parents=True,exist_ok=True)
         fd=open(LOG_FILE,'a')
-        self.proc=subprocess.Popen([sys.executable,self.script],stdout=fd,stderr=fd,
+        self.proc=subprocess.Popen([sys.executable,'-m',self.script],stdout=fd,stderr=fd,
+            cwd=str(Path(__file__).resolve().parent),
             preexec_fn=os.setsid if hasattr(os,'setsid') else None)
         self._starts+=1
         PID_FILE.write_text(str(self.proc.pid))
@@ -60,7 +61,7 @@ class DaemonProc:
 
 class FlashSupervisor:
     def __init__(self, script=None):
-        if script is None: script=str(Path(__file__).parent/'flash_loan_engine.py')
+        if script is None: script='jdl_flash.flash_loan_engine'  # run via python -m
         self.d=DaemonProc(script); self._notified=False
 
     def _status(self):

@@ -12,3 +12,6 @@ data/
 .DS_Store
 *.db
 logs/
+
+*.egg-info/
+build/

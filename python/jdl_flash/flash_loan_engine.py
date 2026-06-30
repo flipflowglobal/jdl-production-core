@@ -902,12 +902,12 @@ class RealQuoteScanner:
 #  simulated values. Degrades gracefully if a module file is absent.
 # ─────────────────────────────────────────────
 try:
-    from realness_guard      import RealnessGuard
-    from loan_optimizer      import LoanOptimizer
-    from triangular_scanner  import TriangularScanner
-    from pattern_recognition import PatternRecognition
-    from market_analysis     import MarketAnalysis
-    from prediction          import EWMAForecast, ConfidenceScorer
+    from jdl_flash.realness_guard      import RealnessGuard
+    from jdl_flash.loan_optimizer      import LoanOptimizer
+    from jdl_flash.triangular_scanner  import TriangularScanner
+    from jdl_flash.pattern_recognition import PatternRecognition
+    from jdl_flash.market_analysis     import MarketAnalysis
+    from jdl_flash.prediction          import EWMAForecast, ConfidenceScorer
     ADV_MODULES_OK = True
 except Exception as _adv_err:        # missing file / import error → engine still runs
     ADV_MODULES_OK = False
@@ -1447,7 +1447,7 @@ async def menu_tests():
     clear()
     print(f"\n{C.BOLD}{C.CYAN}  ─── RUNNING TESTS ───{C.RESET}\n")
     try:
-        from test_flash_engine import run_all_tests
+        from jdl_flash.test_flash_engine import run_all_tests
         await run_all_tests(verbose=True)
     except ImportError:
         print(f"  {C.RED}test_flash_engine.py not found in python/ directory.{C.RESET}")
@@ -1715,9 +1715,13 @@ def menu_connection():
             print(f"    • The public node {C.DIM}arb1.arbitrum.io/rpc{C.RESET} is tried automatically but is rate-limited.")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
-if __name__ == '__main__':
+def _run():
+    """Console-script entry point (the `flashloan` command). Runs from any directory."""
     logging.basicConfig(level=logging.WARNING, format='%(levelname)s %(message)s')
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
+if __name__ == '__main__':
+    _run()

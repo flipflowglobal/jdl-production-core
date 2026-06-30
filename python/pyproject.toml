@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jdl-flash"
+version = "1.0.0"
+description = "Termux flash-loan arbitrage engine (Arbitrum One) with advanced math/ML toolkit"
+requires-python = ">=3.9"
+# web3 5.31.4 is the Termux-compatible pin (pure-Python, no Rust). The advanced
+# modules are stdlib-only; web3 is only needed for live on-chain quotes/execution.
+dependencies = [
+    "web3==5.31.4",
+]
+
+[project.scripts]
+flashloan = "jdl_flash.flash_loan_engine:_run"
+flashpro  = "jdl_flash.flash_pro:main"
+
+[tool.setuptools]
+packages = ["jdl_flash"]
