@@ -48,7 +48,9 @@ try:
         NewtonRaphsonAMM, BellmanFordArb, UCB1Bandit, QLearning,
         FourierCycle, EMAWeights, ZScoreDetector,
         RevenueTracker, OpportunityScanner, PriceFeed,
-        FlashDaemon, GAS_STRATEGIES, init_db, DB_PATH
+        FlashDaemon, GAS_STRATEGIES, init_db, DB_PATH,
+        AdvancedEngine, ADV_MODULES_OK, ADV_TOKENS, RealnessGuard,
+        USDC_NATIVE, WETH_ARB_T,
     )
     ENGINE_OK = True
 except ImportError as e:
@@ -285,6 +287,50 @@ async def test_daemon_cycle():
         check('Single cycle completes', False, str(e))
 
 
+def test_advanced_integration():
+    section('Advanced Module Integration')
+    check('Advanced modules importable', ADV_MODULES_OK)
+    check('Token registry has >=4 real tokens', len(ADV_TOKENS) >= 4,
+          f'{len(ADV_TOKENS)} tokens')
+    for sym, (addr, dec) in ADV_TOKENS.items():
+        check(f'{sym} address checksum-shaped', addr.startswith('0x') and len(addr) == 42)
+    if not ADV_MODULES_OK:
+        return
+
+    # Build an AdvancedEngine with a deterministic in-memory quoter (no RPC needed)
+    # so the wiring (adapter + optimizer + triangular + guard) is verified offline.
+    adv = AdvancedEngine.__new__(AdvancedEngine)
+    from flash_loan_engine import PatternRecognition, MarketAnalysis
+    adv.guard = RealnessGuard(); adv.pat = PatternRecognition(); adv.mkt = MarketAnalysis()
+
+    class _Q:
+        def ready(self): return True
+        def quote(self, ti, to, amt, fee):
+            if ti == USDC_NATIVE and to == WETH_ARB_T: return int(amt / 1e6 / 3000 * 1e18)
+            if ti == WETH_ARB_T and to == USDC_NATIVE: return int(amt / 1e18 * 3000 * 1.001 * 1e6)
+            return int(amt)
+    adv.quoter = _Q()
+
+    check('AdvancedEngine.ready() true with quoter', adv.ready())
+
+    # realness adapter: rejects None, accepts real positive ints
+    check('quote_fn rejects None output',
+          (setattr(adv.quoter, 'quote', lambda *a: None) or adv._quote_fn(USDC_NATIVE, WETH_ARB_T, 10**6, 500)) is None)
+    adv.quoter = _Q()  # restore
+    check('quote_fn passes real positive output',
+          adv._quote_fn(USDC_NATIVE, WETH_ARB_T, 10**6, 500) is not None)
+
+    # optimizer maximises to the cap when edge is positive (maximise profits)
+    opt = adv.optimal_loan_size(1_000, 50_000, 500, 3000)
+    check('optimal_size > 0 on positive edge', opt['size_usd'] > 0, f"${opt['size_usd']:,.0f}")
+    check('optimal_size net profit > 0', opt['net_usd'] > 0, f"${opt['net_usd']:.4f}")
+
+    # triangular scanner probes real route combinations
+    tri = adv.triangular_scan('USDC', 10_000)
+    check('triangular probes routes', tri['routes_probed'] > 0, f"{tri['routes_probed']} routes")
+    check('triangular returns list', isinstance(tri['profitable'], list))
+
+
 async def run_all_tests(verbose: bool = True):
     global _pass, _fail, _results
     _pass = 0; _fail = 0; _results = []
@@ -305,6 +351,7 @@ async def run_all_tests(verbose: bool = True):
     test_fourier()
     test_ema_zscore()
     test_revenue_tracker()
+    test_advanced_integration()
     await test_scanner()
     await test_daemon_cycle()
 

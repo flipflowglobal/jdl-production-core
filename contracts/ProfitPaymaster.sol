@@ -51,7 +51,7 @@ contract ProfitPaymaster {
         UserOperation calldata userOp,
         bytes32,
         uint256 maxCost
-    ) external onlyEntryPoint returns (bytes memory context, uint256 validationData) {
+    ) external view onlyEntryPoint returns (bytes memory context, uint256 validationData) {
         require(userOp.paymasterAndData.length>=104,"bad pmd");
         address fc  = address(bytes20(userOp.paymasterAndData[20:40]));
         uint256 mpo = uint256(bytes32(userOp.paymasterAndData[40:72]));
