@@ -108,14 +108,32 @@ BICONOMY_K  = _env('BICONOMY_API_KEY')
 PAYMASTER   = _env('PAYMASTER_ADDRESS')
 CHAIN_ID    = int(_env('CHAIN_ID', default='42161') or '42161')
 
-# ─ RPC resolution: explicit RPC_URL wins, else build from Alchemy key, else public ─
+# ─ RPC resolution: build a PRIORITISED list with automatic failover ─
+# Order: your RPC_URL → your Alchemy key → any RPC_FALLBACKS → public node (last resort).
+# get_w3() tries each in turn and uses the first that actually connects, so one
+# provider rate-limiting or going down never takes the engine offline.
+def _valid_rpc(u: str) -> bool:
+    return bool(u) and 'YOUR_ALCHEMY' not in u and 'YOUR_KEY' not in u and ' ' not in u.strip()
+
 _RPC_URL    = _env('RPC_URL', 'ARBITRUM_RPC_URL', 'ARB_RPC_URL')
-if _RPC_URL and 'YOUR_ALCHEMY' not in _RPC_URL and 'YOUR_KEY' not in _RPC_URL:
-    RPC_ARB = _RPC_URL
-elif ALCH_ARB:
-    RPC_ARB = f'https://arb-mainnet.g.alchemy.com/v2/{ALCH_ARB}'
-else:
-    RPC_ARB = 'https://arb1.arbitrum.io/rpc'   # public fallback (read-only ok, no key)
+def _build_rpc_endpoints() -> list:
+    eps = []
+    if _valid_rpc(_RPC_URL):
+        eps.append(_RPC_URL.strip())
+    if ALCH_ARB:
+        eps.append(f'https://arb-mainnet.g.alchemy.com/v2/{ALCH_ARB}')
+    for u in (_env('RPC_FALLBACKS', default='') or '').split(','):
+        if _valid_rpc(u):
+            eps.append(u.strip())
+    eps.append('https://arb1.arbitrum.io/rpc')   # public last resort (no key)
+    seen, out = set(), []
+    for u in eps:
+        if u not in seen:
+            seen.add(u); out.append(u)
+    return out
+
+RPC_ENDPOINTS = _build_rpc_endpoints()
+RPC_ARB = RPC_ENDPOINTS[0]               # primary (display + first connection attempt)
 
 _RPC_ETH_URL = _env('ETH_RPC_URL', 'ETHEREUM_RPC_URL')
 if _RPC_ETH_URL and 'YOUR' not in _RPC_ETH_URL:
@@ -265,20 +283,33 @@ DB_PATH  = DATA_DIR / 'flash.db'
 #  SHARED WEB3 + LIVE CHAIN STATUS
 # ─────────────────────────────────────────────
 _W3_SINGLETON = None
+ACTIVE_RPC    = RPC_ARB          # the endpoint actually serving requests
 def get_w3():
-    """Lazily build and reuse a single Web3 connection to RPC_ARB."""
-    global _W3_SINGLETON
+    """Connect with automatic failover: try each RPC in RPC_ENDPOINTS and reuse
+    the first that genuinely connects. One provider being down/rate-limited never
+    takes the engine offline — it transparently falls through to the next."""
+    global _W3_SINGLETON, ACTIVE_RPC
     if not WEB3_OK:
         return None
     if _W3_SINGLETON is not None:
         return _W3_SINGLETON
-    try:
-        w3 = Web3(Web3.HTTPProvider(RPC_ARB, request_kwargs={'timeout': 8}))
-        _inject_poa(w3)
-        _W3_SINGLETON = w3
-    except Exception:
-        _W3_SINGLETON = None
-    return _W3_SINGLETON
+    for ep in RPC_ENDPOINTS:
+        try:
+            w3 = Web3(Web3.HTTPProvider(ep, request_kwargs={'timeout': 8}))
+            _inject_poa(w3)
+            if _is_connected(w3):        # verify it actually answers, not just constructs
+                _W3_SINGLETON = w3
+                ACTIVE_RPC = ep
+                return w3
+        except Exception:
+            continue
+    return None
+
+def reset_w3():
+    """Drop the cached connection so the next get_w3() re-runs failover. Call
+    after repeated RPC errors to fail over to the next endpoint at runtime."""
+    global _W3_SINGLETON
+    _W3_SINGLETON = None
 
 _CHAIN_CACHE = {'ts': 0.0, 'data': None}
 def chain_status(force: bool = False) -> dict:
@@ -287,7 +318,7 @@ def chain_status(force: bool = False) -> dict:
     if not force and _CHAIN_CACHE['data'] and (now - _CHAIN_CACHE['ts'] < 30):
         return _CHAIN_CACHE['data']
     out = {'connected': False, 'chain_id': None, 'block': None,
-           'gas_gwei': None, 'balance_eth': None, 'rpc': RPC_ARB,
+           'gas_gwei': None, 'balance_eth': None, 'rpc': ACTIVE_RPC,
            'using_key': RPC_USING_KEY, 'error': None}
     if not WEB3_OK:
         out['error'] = 'web3 not installed'
@@ -1192,6 +1223,9 @@ class FlashDaemon:
                 print(f"  {C.YELLOW}[{ts}] #{self.cycle:04d} no live RPC — refusing to "
                       f"fabricate data (real-data-only). Set RPC_URL/ALCHEMY_ARB_KEY.{C.RESET}")
             self.errors += 1
+            reset_w3()                 # drop dead connection → next cycle re-runs failover
+            self.feed = PriceFeed()    # rebuild feed against the next endpoint
+            self.rqs  = RealQuoteScanner(self.feed)
             return
         if not opp:
             if verbose:
