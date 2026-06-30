@@ -173,6 +173,23 @@ _STEP_TUPLE = '(uint8,address,address,address,uint24,uint256,uint8,uint8,bytes32
 USE_REAL_QUOTES = _env('USE_REAL_QUOTES', 'REAL_QUOTES', default='').lower() in ('1','true','yes','on')
 REAL_LOAN_USD   = float(_env('REAL_LOAN_USD', default='10000') or '10000')
 
+# ── Real-data-only policy ───────────────────────────────────────────────────
+# Simulated / sample / fabricated data (the OpportunityScanner spread model, fake
+# tx hashes, mock profit) is FORBIDDEN on any mainnet. It is permitted ONLY on the
+# Sepolia testnet (chainId 11155111), where there is no real money at stake.
+SEPOLIA_CHAIN_ID = 11155111
+IS_TESTNET  = CHAIN_ID == SEPOLIA_CHAIN_ID
+ALLOW_SIM   = IS_TESTNET                 # simulated paths reachable only on Sepolia
+# On mainnet, force live on-chain quotes regardless of the USE_REAL_QUOTES flag.
+if not ALLOW_SIM:
+    USE_REAL_QUOTES = True
+
+# Maximum-revenue mode: when set, the daemon sizes each loan with LoanOptimizer
+# (ternary search up to MAX_LOAN_USD) instead of the fixed REAL_LOAN_USD, to
+# capture the largest real profit a pool will fill. Small-revenue mode is just a
+# low MIN_PROFIT_USD + small REAL_LOAN_USD. Both use real quotes only.
+MAXIMISE_REVENUE = _env('MAXIMISE_REVENUE', 'MAX_REVENUE', default='').lower() in ('1','true','yes','on')
+
 # Uniswap V3 QuoterV2 (same canonical address on Arbitrum/Ethereum/Optimism/Polygon)
 QUOTER_V2 = '0x61fFE014bA17989E743c5F6cB21bF9697530B21e'
 # Native USDC on Arbitrum (Quoter pools use native USDC, not bridged USDC.e)
@@ -399,6 +416,10 @@ def init_db():
             value TEXT
         );
     """)
+    # Real-data-only: purge any legacy simulated/dry-run rows so revenue totals
+    # only ever reflect real on-chain executions. (Sepolia testnet rows are kept.)
+    con.execute("DELETE FROM executions WHERE tx_hash LIKE 'sim_%' OR tx_hash LIKE 'dry_%'")
+    con.execute("DELETE FROM opportunities WHERE protocol = 'uni_v3+sushi'")  # old simulated scanner
     con.commit()
     con.close()
 
@@ -632,12 +653,16 @@ class PriceFeed:
     WETH_USDC_POOL = '0xC6962004f452bE9203591991D15f6b388e09E8D0'
     def __init__(self):
         self.kf = KalmanPrice()
-        self._eth: float = 2000.0
-        self._gas: float = 0.1
+        # Real-data-only: 0.0 means "no real read yet" (never a fabricated price).
+        # Display layers must check `online` and show "unavailable" rather than 0.
+        self._eth: float = 0.0
+        self._gas: float = 0.0
+        self.online: bool = False
         # Always try to connect — public RPC works for reads even without a key.
         self._w3 = get_w3()
 
     def eth_price(self) -> float:
+        """Real ETH/USDC from the live Uniswap V3 pool. 0.0 if no real read (offline)."""
         if self._w3:
             try:
                 abi = '[{"inputs":[],"name":"slot0","outputs":[{"type":"uint160","name":"sqrtPriceX96"},{"type":"int24","name":"tick"},{"type":"uint16"},{"type":"uint16"},{"type":"uint16"},{"type":"uint8"},{"type":"bool"}],"stateMutability":"view","type":"function"}]'
@@ -645,18 +670,25 @@ class PriceFeed:
                 s0   = pool.functions.slot0().call()
                 raw  = (s0[0]/(2**96))**2 * 1e12
                 self._eth = self.kf.update(raw)
+                self.online = True
             except Exception:
                 pass
         return self._eth
 
     def gas_gwei(self) -> float:
+        """Real gas price (gwei). 0.0 if no real read (offline)."""
         if self._w3:
-            try: self._gas = _gas_p(self._w3)/1e9
+            try:
+                self._gas = _gas_p(self._w3)/1e9
+                self.online = True
             except Exception: pass
         return self._gas
 
     def gas_usd(self, gas_units=500_000) -> float:
-        return self.gas_gwei() * gas_units * 1e-9 * self.eth_price()
+        eth = self.eth_price()
+        if not eth:        # no real price → no fabricated gas cost
+            return 0.0
+        return self.gas_gwei() * gas_units * 1e-9 * eth
 
 # ─────────────────────────────────────────────
 #  PROTOCOL FINDER
@@ -1131,16 +1163,36 @@ class FlashDaemon:
         self.bandit.load()
         self.qlearn.load()
 
+    def _optimal_loan(self) -> float:
+        """Maximise-revenue sizing: largest real-profit loan via LoanOptimizer
+        (ternary search REAL_LOAN_USD..MAX_LOAN_USD against live quotes). Falls
+        back to REAL_LOAN_USD if the optimizer finds no positive-net size."""
+        try:
+            if ADV_MODULES_OK:
+                r = AdvancedEngine(self.feed).optimal_loan_size(REAL_LOAN_USD, MAX_LOAN_USD)
+                if r.get('size_usd', 0) > 0 and r.get('net_usd', 0) > 0:
+                    return float(r['size_usd'])
+        except Exception:
+            pass
+        return REAL_LOAN_USD
+
     async def cycle_run(self, verbose: bool = True):
         self.cycle += 1
         ts      = datetime.now().strftime('%H:%M:%S')
         eth_p   = self.feed.eth_price()
         gas_g   = self.feed.gas_gwei()
         gas_usd = self.feed.gas_usd()
-        if USE_REAL_QUOTES and self.rqs.ready():
-            opp = self.rqs.scan(REAL_LOAN_USD)     # real on-chain QuoterV2 prices
+        if self.rqs.ready():
+            loan = self._optimal_loan() if MAXIMISE_REVENUE else REAL_LOAN_USD
+            opp = self.rqs.scan(loan)              # real on-chain QuoterV2 prices only
+        elif ALLOW_SIM:
+            opp = self.scanner.scan()              # Sepolia testnet ONLY — simulated model
         else:
-            opp = self.scanner.scan()              # simulated spread model
+            if verbose:
+                print(f"  {C.YELLOW}[{ts}] #{self.cycle:04d} no live RPC — refusing to "
+                      f"fabricate data (real-data-only). Set RPC_URL/ALCHEMY_ARB_KEY.{C.RESET}")
+            self.errors += 1
+            return
         if not opp:
             if verbose:
                 print(f"  {C.DIM}[{ts}] #{self.cycle:04d} scanning — no edge detected  eth=${eth_p:,.0f}  gas={gas_g:.3f}gwei{C.RESET}")
@@ -1160,38 +1212,46 @@ class FlashDaemon:
         self.qlearn.ls = state; self.qlearn.la = arm
         print(f"  {C.DIM}    strategy={strategy}  arm={arm}{C.RESET}")
         tx_hash = None
-        mode    = 'SIM'
+        mode    = 'SCAN'
         try:
-            if not (CONTRACT and WEB3_OK):
-                tx_hash = f'sim_{hashlib.md5(f"{time.time()}".encode()).hexdigest()[:16]}'
-                mode = 'SIM'
-            elif not LIVE_EXEC:
-                cd = build_initiate_calldata(opp)            # prove the calldata path
-                tx_hash = f'dry_{hashlib.md5((cd or str(time.time())).encode()).hexdigest()[:16]}'
+            if CONTRACT and WEB3_OK and LIVE_EXEC:
+                if strategy == 'FLASHBOTS_PEG' and CHAIN_ID == 1:
+                    tx_hash = self.peg.submit(opp, eth_p)
+                else:
+                    tx_hash = self.nexus.send(opp)           # real on-chain broadcast
+                mode = 'LIVE' if tx_hash else 'FAILED'
+            elif CONTRACT and WEB3_OK and not LIVE_EXEC:
+                build_initiate_calldata(opp)                 # prove calldata path, never broadcast
                 mode = 'DRY'
-            elif strategy == 'FLASHBOTS_PEG' and CHAIN_ID == 1:
-                tx_hash = self.peg.submit(opp, eth_p); mode = 'LIVE'
             else:
-                tx_hash = self.nexus.send(opp); mode = 'LIVE'  # direct Arbitrum broadcast
-            net = RevenueTracker.log(
-                opp.type, strategy, opp.asset,
-                opp.loan_usd, opp.profit_usd, gas_usd,
-                tx_hash or '', 1 if tx_hash else 0
-            )
-            reward = net if tx_hash else -gas_usd
-            self.bandit.update(arm, reward)
-            ns = self.qlearn.encode(self.scanner.garch.high_vol(), net>5.0, hg)
-            self.qlearn.update(reward, ns)
-            total = RevenueTracker.total()
-            pct   = min(total/WITHDRAW_THRESH*100,100)
-            bar   = int(pct/5)
-            pbar  = f"[{'#'*bar}{'.'*(20-bar)}]"
-            if tx_hash:
-                print(f"  {C.BGREEN}  ✓ {mode}{C.RESET}  hash={C.DIM}{(tx_hash or '')[:18]}...{C.RESET}  net={C.BYELLOW}${net:.3f}{C.RESET}")
+                mode = 'SCAN'                                # no contract — observe real edge only
+
+            # Revenue is recorded ONLY for real on-chain executions. SIM/DRY/SCAN
+            # are never written as revenue on mainnet (real-data-only). Sepolia
+            # (ALLOW_SIM) may record testnet results for end-to-end testing.
+            record = (mode == 'LIVE' and tx_hash) or (ALLOW_SIM and mode != 'FAILED')
+            if record:
+                net = RevenueTracker.log(
+                    opp.type, strategy, opp.asset,
+                    opp.loan_usd, opp.profit_usd, gas_usd,
+                    tx_hash or 'sepolia_testnet', 1 if tx_hash else 0)
+                reward = net if tx_hash else -gas_usd
+                self.bandit.update(arm, reward)
+                ns = self.qlearn.encode(self.scanner.garch.high_vol(), net>5.0, hg)
+                self.qlearn.update(reward, ns)
+                total = RevenueTracker.total(); pct = min(total/WITHDRAW_THRESH*100,100)
+                bar = int(pct/5); pbar = f"[{'#'*bar}{'.'*(20-bar)}]"
+                print(f"  {C.BGREEN}  ✓ {mode}{C.RESET}  hash={C.DIM}{(tx_hash or 'testnet')[:18]}...{C.RESET}  net={C.BYELLOW}${net:.3f}{C.RESET}")
                 print(f"  {C.CYAN}  revenue {pbar} ${total:,.2f}/${WITHDRAW_THRESH:,.0f} ({pct:.1f}%){C.RESET}")
-            else:
+            elif mode == 'FAILED':
                 self.errors += 1
-                print(f"  {C.RED}  ✗ submit failed{C.RESET}  {strategy}")
+                print(f"  {C.RED}  ✗ broadcast failed{C.RESET}  {strategy}")
+            elif mode == 'DRY':
+                print(f"  {C.BYELLOW}  • DRY-RUN{C.RESET} real edge · calldata built · not broadcast — "
+                      f"{C.DIM}not recorded as revenue{C.RESET}")
+            else:  # SCAN — real edge seen but no contract to execute it
+                print(f"  {C.BYELLOW}  • REAL EDGE (observe-only){C.RESET} — set FLASH_CONTRACT_ADDRESS + "
+                      f"LIVE_EXECUTION=1 to execute — {C.DIM}not recorded{C.RESET}")
         except Exception as e:
             logging.error(f'cycle: {e}')
             self.errors += 1
@@ -1299,27 +1359,34 @@ async def menu_run_daemon():
 
 async def menu_scan_now():
     clear()
-    print(f"\n{C.BOLD}{C.CYAN}  ─── OPPORTUNITY SCANNER ───{C.RESET}\n")
-    feed    = PriceFeed()
-    scanner = OpportunityScanner(feed)
-    eth_p   = feed.eth_price()
-    gas_g   = feed.gas_gwei()
+    print(f"\n{C.BOLD}{C.CYAN}  ─── OPPORTUNITY SCANNER (real on-chain) ───{C.RESET}\n")
+    feed = PriceFeed()
+    rqs  = RealQuoteScanner(feed)
     print(_chain_line())
-    print(f"\n  ETH/USDC: {C.BYELLOW}${eth_p:,.2f}{C.RESET}   Gas: {C.CYAN}{gas_g:.3f} gwei{C.RESET}\n")
-    print(f"  {C.DIM}Scanning cross-DEX spreads (Uni V3 × Sushi) …{C.RESET}\n")
-    found = 0
-    for _ in range(10):
-        opp = scanner.scan()
-        if opp:
-            found += 1
-            print(f"  {C.BGREEN}✓{C.RESET} {opp.type:<22} profit={C.BYELLOW}${opp.profit_usd:.4f}{C.RESET}"
-                  f"  loan={C.CYAN}${opp.loan_usd:,.0f}{C.RESET}"
-                  f"  vol={opp.vol*100:.2f}%  spread={opp.spread*100:.3f}%"
-                  f"  src={C.DIM}{opp.source}{C.RESET}")
+    if not rqs.ready():
+        if ALLOW_SIM:
+            print(f"\n  {C.YELLOW}Sepolia testnet: no live mainnet quoter — simulated scan.{C.RESET}")
         else:
-            print(f"  {C.DIM}—  no edge{C.RESET}")
-        await asyncio.sleep(0.1)
-    print(f"\n  Found {C.BGREEN}{found}{C.RESET}/10 opportunities.")
+            print(f"\n  {C.RED}No live RPC connection — cannot fetch real quotes.{C.RESET}")
+            print(f"  {C.DIM}Set RPC_URL or ALCHEMY_ARB_KEY in ~/jdl/.env, then test with [c].{C.RESET}")
+            print(f"  {C.DIM}Real-data-only: refusing to show fabricated opportunities.{C.RESET}")
+            input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    eth_p = feed.eth_price(); gas_g = feed.gas_gwei()
+    eth_s = f"${eth_p:,.2f}" if eth_p else f"{C.DIM}unavailable{C.RESET}"
+    gas_s = f"{gas_g:.3f} gwei" if gas_g else f"{C.DIM}unavailable{C.RESET}"
+    print(f"\n  ETH/USDC: {C.BYELLOW}{eth_s}{C.RESET}   Gas: {C.CYAN}{gas_s}{C.RESET}")
+    print(f"  {C.DIM}Probing real USDC→WETH→USDC round-trips across fee tiers (loan ${REAL_LOAN_USD:,.0f})…{C.RESET}\n")
+    best = rqs.best_roundtrip(REAL_LOAN_USD)
+    if best:
+        profit_base, buy_fee, sell_fee, usdc_out, _ = best
+        profit_usd = profit_base / 1e6
+        col = C.BGREEN if profit_usd >= MIN_PROFIT_USD else C.YELLOW
+        print(f"  Best real round-trip: {col}${profit_usd:+.4f}{C.RESET} net  "
+              f"(buy {buy_fee/10000:.2f}% → sell {sell_fee/10000:.2f}%)")
+        if profit_usd < MIN_PROFIT_USD:
+            print(f"  {C.DIM}Below MIN_PROFIT_USD (${MIN_PROFIT_USD}). No edge — efficient market (honest result).{C.RESET}")
+    else:
+        print(f"  {C.DIM}No pool answered — RPC may be rate-limiting. No fabricated result shown.{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 def menu_gas_strategies():
@@ -1369,9 +1436,13 @@ def menu_algorithms():
     feed = PriceFeed(); eth = feed.eth_price(); gas = feed.gas_gwei()
     g = GARCH11(); g.update(0.002); g.update(-0.001); g.update(0.003)
     print(f"  {C.BOLD}Market State{C.RESET}")
-    print(f"    ETH/USDC:   {C.BYELLOW}${eth:,.2f}{C.RESET}")
-    print(f"    Gas:        {C.CYAN}{gas:.3f} gwei{C.RESET}")
-    print(f"    Gas cost:   {C.DIM}${feed.gas_usd():.4f} USD (500k gas){C.RESET}")
+    if feed.online:
+        print(f"    ETH/USDC:   {C.BYELLOW}${eth:,.2f}{C.RESET}")
+        print(f"    Gas:        {C.CYAN}{gas:.3f} gwei{C.RESET}")
+        print(f"    Gas cost:   {C.DIM}${feed.gas_usd():.4f} USD (500k gas){C.RESET}")
+    else:
+        print(f"    ETH/USDC:   {C.DIM}unavailable (no live RPC){C.RESET}")
+        print(f"    Gas:        {C.DIM}unavailable{C.RESET}")
     print()
     print(f"  {C.BOLD}GARCH(1,1){C.RESET}   σ²_t = ω + α·ε²_{{t-1}} + β·σ²_{{t-1}}")
     print(f"    ω={g.omega:.1e}  α={g.alpha}  β={g.beta}")
@@ -1411,7 +1482,10 @@ def menu_status():
     print(f"    Flashbots: {C.BGREEN if FB_SECRET else C.DIM}{'configured' if FB_SECRET else 'not set'}{C.RESET}")
     print(f"    Web3:      {C.BGREEN if WEB3_OK else C.RED}{'OK (v5 Termux-compat)' if WEB3_OK else 'not installed'}{C.RESET}")
     print(f"    Execution: {(C.BGREEN+'LIVE (broadcasting)') if LIVE_EXEC else (C.YELLOW+'dry-run (set LIVE_EXECUTION=1)')}{C.RESET}")
-    print(f"    Quotes:    {(C.BCYAN+'real Uniswap V3') if USE_REAL_QUOTES else (C.DIM+'simulated (set USE_REAL_QUOTES=1)')}{C.RESET}")
+    print(f"    Quotes:    {(C.BCYAN+'real Uniswap V3 QuoterV2') if USE_REAL_QUOTES else (C.YELLOW+'Sepolia testnet (sim allowed)')}{C.RESET}")
+    print(f"    Network:   {(C.BCYAN+'Sepolia TESTNET (sim ok)') if IS_TESTNET else (C.BGREEN+'mainnet — REAL-DATA-ONLY')}{C.RESET}")
+    print(f"    Sizing:    {(C.BCYAN+'maximise (LoanOptimizer)') if MAXIMISE_REVENUE else (C.DIM+f'fixed ${REAL_LOAN_USD:,.0f} (set MAXIMISE_REVENUE=1)')}{C.RESET}")
+    print(f"    Min profit:{C.CYAN} ${MIN_PROFIT_USD}{C.RESET}  {C.DIM}(lower = small-revenue gathering){C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 def menu_config():
@@ -1438,8 +1512,9 @@ def menu_config():
         sym = f"{C.BGREEN}YES{C.RESET}" if ok else f"{C.YELLOW}NO {C.RESET}"
         print(f"  {C.CYAN}{var:<28}{C.RESET} {sym}  {C.DIM}{desc}{C.RESET}")
     exec_line = f"{C.BGREEN}LIVE{C.RESET}" if LIVE_EXEC else f"{C.YELLOW}dry-run{C.RESET}"
-    quote_line = f"{C.BCYAN}real{C.RESET}" if USE_REAL_QUOTES else f"{C.DIM}simulated{C.RESET}"
-    print(f"\n  LIVE_EXECUTION: {exec_line}   USE_REAL_QUOTES: {quote_line}   {C.DIM}(edit ~/jdl/.env){C.RESET}")
+    quote_line = f"{C.BCYAN}real{C.RESET}" if USE_REAL_QUOTES else f"{C.YELLOW}sepolia-sim{C.RESET}"
+    net_line = f"{C.BCYAN}Sepolia testnet{C.RESET}" if IS_TESTNET else f"{C.BGREEN}mainnet (real-data-only){C.RESET}"
+    print(f"\n  Network: {net_line}   LIVE_EXECUTION: {exec_line}   Quotes: {quote_line}   {C.DIM}(edit ~/jdl/.env){C.RESET}")
     print(f"  Edit: {C.CYAN}nano ~/jdl/.env{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 

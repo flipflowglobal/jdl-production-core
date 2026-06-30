@@ -53,6 +53,8 @@ try:
         FlashDaemon, GAS_STRATEGIES, init_db, DB_PATH,
         AdvancedEngine, ADV_MODULES_OK, ADV_TOKENS, RealnessGuard,
         USDC_NATIVE, WETH_ARB_T,
+        ALLOW_SIM, IS_TESTNET, USE_REAL_QUOTES, CHAIN_ID,
+        SEPOLIA_CHAIN_ID, REAL_LOAN_USD, MAX_LOAN_USD, db_exec, db_query,
     )
     ENGINE_OK = True
 except ImportError as e:
@@ -333,6 +335,35 @@ def test_advanced_integration():
     check('triangular returns list', isinstance(tri['profitable'], list))
 
 
+def test_real_data_policy():
+    section('Real-Data-Only Policy')
+    # Simulated data is allowed ONLY on Sepolia testnet.
+    check('ALLOW_SIM matches Sepolia chain', ALLOW_SIM == (CHAIN_ID == SEPOLIA_CHAIN_ID),
+          f'chain={CHAIN_ID} allow_sim={ALLOW_SIM}')
+    check('IS_TESTNET flag correct', IS_TESTNET == (CHAIN_ID == SEPOLIA_CHAIN_ID))
+    if CHAIN_ID != SEPOLIA_CHAIN_ID:
+        check('mainnet forces real quotes', USE_REAL_QUOTES is True)
+        check('mainnet forbids simulation', ALLOW_SIM is False)
+
+    # init_db must purge any legacy simulated/dry-run revenue rows.
+    init_db()
+    db_exec('INSERT INTO executions(ts,strategy,gas_method,asset,loan_usd,profit_usd,'
+            'gas_cost_usd,net_usd,tx_hash,success) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            (time.time(), 'TEST', 'm', 'a', 1.0, 9.99, 0.0, 9.99, 'sim_deadbeefdeadbeef', 1))
+    before = db_query("SELECT COUNT(*) FROM executions WHERE tx_hash LIKE 'sim_%'")[0][0]
+    check('fake sim row inserted for test', before >= 1)
+    init_db()  # should purge it
+    after = db_query("SELECT COUNT(*) FROM executions WHERE tx_hash LIKE 'sim_%'")[0][0]
+    check('init_db purges simulated revenue rows', after == 0, f'remaining={after}')
+
+    # Maximise-revenue sizing returns a real positive loan (or the safe default).
+    d = FlashDaemon()
+    loan = d._optimal_loan()
+    check('optimal loan is a positive float', isinstance(loan, float) and loan > 0, f'${loan:,.0f}')
+    check('optimal loan within [REAL_LOAN_USD, MAX_LOAN_USD]',
+          REAL_LOAN_USD <= loan <= MAX_LOAN_USD or loan == REAL_LOAN_USD)
+
+
 async def run_all_tests(verbose: bool = True):
     global _pass, _fail, _results
     _pass = 0; _fail = 0; _results = []
@@ -354,6 +385,7 @@ async def run_all_tests(verbose: bool = True):
     test_ema_zscore()
     test_revenue_tracker()
     test_advanced_integration()
+    test_real_data_policy()
     await test_scanner()
     await test_daemon_cycle()
 
