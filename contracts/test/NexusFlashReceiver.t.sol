@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+// Foundry mainnet-fork dry-run for NexusFlashReceiver on Arbitrum One.
+// Mirrors test/fork-flash.test.js (Hardhat) so the contracts can be verified
+// with either toolchain — Foundry is the recommended path on Termux where
+// Hardhat/Node may be awkward.
+//
+// Run:  ARB_RPC_URL=https://arb1.arbitrum.io/rpc forge test --match-path test/NexusFlashReceiver.t.sol -vv
+import {Test} from "forge-std/Test.sol";
+import {NexusFlashReceiver} from "../contracts/NexusFlashReceiver.sol";
+import {ArbitrageLib} from "../contracts/ArbitrageLib.sol";
+
+contract NexusFlashReceiverForkTest is Test {
+    // ─── Real Arbitrum One addresses ───────────────────────────────────────
+    address constant AAVE_V3_POOL   = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
+    address constant UNI_V3_ROUTER  = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    address constant BALANCER_VAULT = 0xBA12222222228d8Ba445958a75a0704d566BF2C8;
+    address constant USDC           = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831; // 6dp
+    address constant WETH           = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1; // 18dp
+
+    NexusFlashReceiver receiver;
+    address owner;
+    address other = address(0xBEEF);
+
+    function setUp() public {
+        // Fork live Arbitrum. Defaults to the public RPC if ARB_RPC_URL is unset.
+        string memory rpc = vm.envOr("ARB_RPC_URL", string("https://arb1.arbitrum.io/rpc"));
+        vm.createSelectFork(rpc);
+        owner = address(this);
+        receiver = new NexusFlashReceiver(AAVE_V3_POOL, UNI_V3_ROUTER, BALANCER_VAULT);
+    }
+
+    function _steps(bool roundTrip) internal pure returns (bytes memory) {
+        uint256 n = roundTrip ? 2 : 1;
+        ArbitrageLib.SwapStep[] memory s = new ArbitrageLib.SwapStep[](n);
+        s[0] = ArbitrageLib.SwapStep(0, address(0), USDC, WETH, 500, 0, 0, 0, bytes32(0));
+        if (roundTrip) {
+            s[1] = ArbitrageLib.SwapStep(0, address(0), WETH, USDC, 3000, 0, 0, 0, bytes32(0));
+        }
+        return abi.encode(s);
+    }
+
+    function test_ForksRealArbitrum() public view {
+        assertEq(block.chainid, 42161, "not Arbitrum One");
+        assertGt(AAVE_V3_POOL.code.length, 0, "Aave Pool has no bytecode on fork");
+    }
+
+    function test_DeploysWithCorrectImmutables() public view {
+        assertEq(receiver.AAVE_POOL(), AAVE_V3_POOL);
+        assertEq(receiver.UNISWAP_V3_ROUTER(), UNI_V3_ROUTER);
+        assertEq(receiver.BALANCER_VAULT(), BALANCER_VAULT);
+        assertEq(receiver.owner(), owner);
+    }
+
+    function test_RejectsNonAaveCaller() public {
+        vm.prank(other);
+        vm.expectRevert(
+            abi.encodeWithSelector(NexusFlashReceiver.OnlyAavePool.selector, other, AAVE_V3_POOL)
+        );
+        receiver.executeOperation(USDC, 1, 0, address(receiver), "");
+    }
+
+    function test_InitiateFlashLoanOwnerOnly() public {
+        vm.prank(other);
+        vm.expectRevert(); // OwnableUnauthorizedAccount
+        receiver.initiateFlashLoan(USDC, 1_000000, _steps(false));
+    }
+
+    // CRYPTO-MOVING PATH: a real 100-USDC flash loan runs Aave flashLoanSimple →
+    // USDC→WETH→USDC through real Uniswap V3 pools → reverts InsufficientProfit on
+    // the unprofitable round-trip. Funds never leave the contract.
+    function test_UnprofitableFlashLoanReverts() public {
+        vm.expectRevert(); // Aave bubbles the receiver's InsufficientProfit revert
+        receiver.initiateFlashLoan(USDC, 100_000000, _steps(true)); // 100 USDC
+    }
+
+    function test_PauseBlocksInitiate() public {
+        receiver.pause();
+        vm.expectRevert(); // EnforcedPause
+        receiver.initiateFlashLoan(USDC, 1_000000, _steps(false));
+        receiver.unpause();
+    }
+
+    function test_OwnerGating() public {
+        vm.prank(other);
+        vm.expectRevert();
+        receiver.rescueTokens(USDC, 1, other);
+
+        vm.prank(other);
+        vm.expectRevert();
+        receiver.pause();
+    }
+}

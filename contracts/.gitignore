@@ -2,3 +2,8 @@ node_modules/
 artifacts/
 cache/
 typechain-types/
+# Foundry
+out/
+broadcast/
+lib/
+.foundry/
