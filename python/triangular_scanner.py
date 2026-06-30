@@ -79,14 +79,14 @@ class TriangularScanner:
         probed = 0
         for sym_b, sym_c in itertools.permutations(intermediates, 2):
             for fee_ab in fees:
+                probed += 1
                 out_ab = self._safe_quote(start, sym_b, amount_in_base, fee_ab)
                 if out_ab is None:
-                    probed += 1
                     continue
                 for fee_bc in fees:
+                    probed += 1
                     out_bc = self._safe_quote(sym_b, sym_c, out_ab, fee_bc)
                     if out_bc is None:
-                        probed += 1
                         continue
                     for fee_ca in fees:
                         probed += 1
