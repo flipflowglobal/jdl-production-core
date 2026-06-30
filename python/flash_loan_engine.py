@@ -895,6 +895,104 @@ class RealQuoteScanner:
             vol=0.0, kelly_frac=kf, spread=spread, source='UNI_V3_QUOTER')
 
 # ─────────────────────────────────────────────
+#  ADVANCED MODULE INTEGRATION  (real quotes only)
+#  Wires advanced_math / pattern_recognition / market_analysis / prediction /
+#  loan_optimizer / triangular_scanner / bot_swarm / realness_guard into the
+#  live engine. Every quote flows through the engine's real UniV3Quoter — no
+#  simulated values. Degrades gracefully if a module file is absent.
+# ─────────────────────────────────────────────
+try:
+    from realness_guard      import RealnessGuard
+    from loan_optimizer      import LoanOptimizer
+    from triangular_scanner  import TriangularScanner
+    from pattern_recognition import PatternRecognition
+    from market_analysis     import MarketAnalysis
+    from prediction          import EWMAForecast, ConfidenceScorer
+    ADV_MODULES_OK = True
+except Exception as _adv_err:        # missing file / import error → engine still runs
+    ADV_MODULES_OK = False
+    _ADV_IMPORT_ERR = str(_adv_err)
+
+# Real Arbitrum One token registry: symbol -> (checksummed address, decimals).
+# Used by the triangular scanner; all addresses are mainnet (Arbitrum One).
+ADV_TOKENS = {
+    'USDC': (USDC_NATIVE,                                   6),   # native USDC
+    'WETH': (WETH_ARB_T,                                    18),
+    'USDT': ('0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',  6),
+    'WBTC': ('0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f',  8),
+    'DAI':  ('0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1',  18),
+    'ARB':  ('0x912CE59144191C1204E64559FE8253a0e49E6548',  18),
+}
+
+class AdvancedEngine:
+    """Bridges the engine's live UniV3Quoter to the advanced modules.
+
+    All sizing/scanning uses real on-chain QuoterV2 output. Profit results may
+    be <= 0 in efficient markets — that is the honest result, reported as-is.
+    """
+    def __init__(self, feed: 'PriceFeed' = None):
+        self.feed   = feed if feed is not None else PriceFeed()
+        self.quoter = UniV3Quoter(getattr(self.feed, '_w3', None))
+        self.guard  = RealnessGuard()        if ADV_MODULES_OK else None
+        self.pat    = PatternRecognition()   if ADV_MODULES_OK else None
+        self.mkt    = MarketAnalysis()       if ADV_MODULES_OK else None
+
+    def ready(self) -> bool:
+        return ADV_MODULES_OK and self.quoter.ready()
+
+    def _quote_fn(self, token_in: str, token_out: str, amount_in: int, fee: int):
+        """Real quote adapter with realness validation. Returns int|None."""
+        out = self.quoter.quote(token_in, token_out, int(amount_in), int(fee))
+        if out is None:
+            return None
+        # Validate the output is a real, finite, positive number. We do NOT use
+        # validate_quote's ratio check here: token_in/token_out can have different
+        # decimals (e.g. USDC 6dp → WETH 18dp), so base-unit ratios are legitimately
+        # huge and a ratio bound would reject every valid cross-decimal quote.
+        if self.guard is not None and not (self.guard.assert_real(out) and out > 0):
+            return None
+        return int(out)
+
+    def optimal_loan_size(self, lo_usd: float, hi_usd: float,
+                          buy_fee: int = 500, sell_fee: int = 3000) -> dict:
+        """Find the USDC loan size in [lo,hi] maximising real net profit
+        (USDC→WETH→USDC) via ternary search against live quotes. Maximises
+        profit up to the highest size the pool still fills."""
+        if not self.ready():
+            return {'size': 0, 'net': 0, 'gross': 0}
+        opt = LoanOptimizer(liquidity_fn=lambda t: int(hi_usd * 1e6),
+                            quote_fn=self._quote_fn)
+        lo = int(lo_usd * 1e6); hi = int(hi_usd * 1e6)
+        res = opt.optimal_size(USDC_NATIVE, WETH_ARB_T, buy_fee, sell_fee, lo, hi, aave_bps=5)
+        # Convert base units (6dp USDC) back to human USD for display.
+        return {
+            'size_usd': res['size'] / 1e6,
+            'net_usd':  res['net']  / 1e6,
+            'gross_usd':res['gross']/ 1e6,
+            'raw': res,
+        }
+
+    def triangular_scan(self, start: str = 'USDC', amount_human: float = None) -> dict:
+        """Real 3-hop A→B→C→A scan across ADV_TOKENS using live QuoterV2."""
+        if not self.ready():
+            return {'profitable': [], 'best': None, 'routes_probed': 0}
+        amt = amount_human if amount_human is not None else REAL_LOAN_USD
+        scanner = TriangularScanner(ADV_TOKENS, self._quote_fn)
+        return scanner.scan(start, amt, list(ADV_TOKENS.keys()))
+
+    def price_history(self, samples: int = 40, fee: int = 500) -> list:
+        """Build a real WETH/USDC price series from repeated QuoterV2 reads
+        (1 WETH → USDC). Used to feed pattern/market analytics."""
+        series = []
+        one_weth = int(1e18)
+        for _ in range(max(2, samples)):
+            out = self.quoter.quote(WETH_ARB_T, USDC_NATIVE, one_weth, fee)
+            if out:
+                series.append(out / 1e6)
+        return series
+
+
+# ─────────────────────────────────────────────
 #  GAS SUBMITTER
 # ─────────────────────────────────────────────
 class FlashbotsPEG:
@@ -1162,6 +1260,9 @@ def print_menu():
   {C.CYAN}[c]{C.RESET} Test On-Chain Connection
   {C.CYAN}[x]{C.RESET} Build Execution Calldata (dry-run)
   {C.CYAN}[q]{C.RESET} Real Quote Scan (Uniswap V3)
+  {C.CYAN}[o]{C.RESET} Optimal Loan Sizing (maximise profit, real)
+  {C.CYAN}[t]{C.RESET} Triangular Scan (real 3-hop)
+  {C.CYAN}[v]{C.RESET} Advanced Analytics (pattern/market/prediction)
   {C.CYAN}[0]{C.RESET} Exit
 """)
 
@@ -1471,6 +1572,80 @@ def menu_real_quote():
         print(f"  {C.YELLOW}No pools answered (RPC rate-limit?). Try a keyed RPC.{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
+def menu_optimal_size():
+    """Find the loan size that maximises real net profit (maximise profits / highest limits)."""
+    clear()
+    print(f"\n{C.BOLD}{C.CYAN}  ─── OPTIMAL LOAN SIZING (real QuoterV2) ───{C.RESET}\n")
+    if not ADV_MODULES_OK:
+        print(f"  {C.RED}Advanced modules unavailable: {_ADV_IMPORT_ERR}{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    adv = AdvancedEngine()
+    if not adv.ready():
+        print(f"  {C.YELLOW}Need a live RPC connection for real quotes (option [c]).{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    print(f"  {C.DIM}Ternary-searching USDC→WETH→USDC for max net profit…{C.RESET}\n")
+    res = adv.optimal_loan_size(lo_usd=1_000.0, hi_usd=MAX_LOAN_USD)
+    col = C.BGREEN if res['net_usd'] > 0 else C.YELLOW
+    print(f"  Optimal loan:  {C.BCYAN}${res['size_usd']:,.2f}{C.RESET}")
+    print(f"  Net profit:    {col}${res['net_usd']:,.4f}{C.RESET}")
+    print(f"  Gross out:     {C.CYAN}${res['gross_usd']:,.2f}{C.RESET}")
+    if res['net_usd'] <= 0:
+        print(f"\n  {C.DIM}No positive edge at any size — efficient market (honest result).{C.RESET}")
+    input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
+
+def menu_triangular():
+    """Real multi-token 3-hop arbitrage scan."""
+    clear()
+    print(f"\n{C.BOLD}{C.CYAN}  ─── TRIANGULAR SCAN (real 3-hop) ───{C.RESET}\n")
+    if not ADV_MODULES_OK:
+        print(f"  {C.RED}Advanced modules unavailable: {_ADV_IMPORT_ERR}{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    adv = AdvancedEngine()
+    if not adv.ready():
+        print(f"  {C.YELLOW}Need a live RPC connection for real quotes (option [c]).{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    print(f"  Tokens: {C.CYAN}{', '.join(ADV_TOKENS.keys())}{C.RESET}   loan ${REAL_LOAN_USD:,.0f}")
+    print(f"  {C.DIM}Probing A→B→C→A cycles via live QuoterV2…{C.RESET}\n")
+    out = adv.triangular_scan('USDC', REAL_LOAN_USD)
+    print(f"  Routes probed: {C.CYAN}{out['routes_probed']}{C.RESET}   "
+          f"profitable: {C.BGREEN}{len(out['profitable'])}{C.RESET}")
+    for r in out['profitable'][:5]:
+        print(f"    {C.BGREEN}✓{C.RESET} {'→'.join(r['path'])}  "
+              f"net={C.BYELLOW}{r['net_human']:.4f} USDC{C.RESET}  fees={r['fees']}")
+    if not out['profitable']:
+        b = out['best']
+        if b:
+            print(f"  {C.DIM}Best (unprofitable): {'→'.join(b['path'])} "
+                  f"net={b['net_human']:.4f} USDC — efficient market.{C.RESET}")
+    input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
+
+def menu_analytics():
+    """Pattern recognition + market analysis + prediction on a real price series."""
+    clear()
+    print(f"\n{C.BOLD}{C.CYAN}  ─── ADVANCED ANALYTICS (real WETH/USDC) ───{C.RESET}\n")
+    if not ADV_MODULES_OK:
+        print(f"  {C.RED}Advanced modules unavailable: {_ADV_IMPORT_ERR}{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    adv = AdvancedEngine()
+    if not adv.ready():
+        print(f"  {C.YELLOW}Need a live RPC connection for real quotes (option [c]).{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    print(f"  {C.DIM}Sampling live WETH→USDC price (40 reads)…{C.RESET}\n")
+    series = adv.price_history(40)
+    if len(series) < 5:
+        print(f"  {C.YELLOW}Insufficient live samples ({len(series)}) — RPC may be rate-limiting.{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    score = adv.pat.score(series)
+    hurst = adv.mkt.hurst_exponent(series)
+    rets  = [series[i+1]-series[i] for i in range(len(series)-1)]
+    regime = adv.mkt.volatility_regime(rets)
+    print(f"  Samples:       {C.CYAN}{len(series)}{C.RESET}  last=${series[-1]:,.2f}")
+    print(f"  Pattern score: {C.BYELLOW}{score['score']:+.3f}{C.RESET}  conf={score['confidence']:.2f}")
+    print(f"  Signals:       {C.DIM}{score['signals']}{C.RESET}")
+    print(f"  Hurst:         {C.CYAN}{hurst}{C.RESET}  {C.DIM}(>0.5 trending, <0.5 mean-revert){C.RESET}")
+    print(f"  Vol regime:    {C.CYAN}{regime['regime']}{C.RESET}")
+    input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
+
 async def main():
     init_db()
     while True:
@@ -1491,6 +1666,9 @@ async def main():
         elif choice == 'c': menu_connection()
         elif choice == 'x': menu_build_calldata()
         elif choice == 'q': menu_real_quote()
+        elif choice == 'o': menu_optimal_size()
+        elif choice == 't': menu_triangular()
+        elif choice == 'v': menu_analytics()
         elif choice == '0': print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
         else: print(f"  {C.RED}Invalid option.{C.RESET}"); await asyncio.sleep(0.4)
 
