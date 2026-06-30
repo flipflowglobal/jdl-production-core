@@ -1,44 +1,62 @@
-# JDL Production Core
+# JDL Flash-Loan Core
 
-Multi-chain trading bot with Rust hot-path acceleration, Node.js API server, and Python AI ensemble.
+A self-contained **flash-loan arbitrage system for Arbitrum One**, built to run on **Termux/Android** with stdlib-only Python + a Termux-compatible web3, plus Solidity contracts testable with **Foundry or Hardhat**.
+
+> History: this repo previously also held a Node.js API server, a Rust hot-path, and a
+> Python AI ensemble ("Machine B"). That subsystem was removed to make this a single,
+> focused Termux flash-loan product. It remains recoverable from git history if ever needed.
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────────┐
-│               Node.js API Server                  │
-│  Express + TypeScript + PostgreSQL                │
-│  Port 8420 · API key auth                         │
+│   python/jdl_flash/  —  Termux engine (package)    │
+│   flash_loan_engine.py  · terminal UI, scan/exec   │
+│   + advanced toolkit (real quotes only):           │
+│     advanced_math · pattern_recognition            │
+│     market_analysis · prediction · loan_optimizer  │
+│     triangular_scanner · bot_swarm · realness_guard│
+│   run anywhere:  pip install -e python/ → flashloan │
 ├──────────────────────────────────────────────────┤
-│            Rust CLI (stdin/stdout JSON-RPC)        │
-│  Bellman-Ford arb finder · DEX quoting · EVM      │
-│  Flash loan building · 56x faster hot paths       │
+│   contracts/  —  Solidity (Foundry + Hardhat)      │
+│   · NexusFlashReceiver.sol — Aave V3 flash loan    │
+│   · ArbitrageLib.sol — SwapStep + helpers          │
+│   · FlashZeroGas.sol — zero-upfront-gas variant    │
+│   · ProfitPaymaster.sol — EIP-4337 paymaster       │
+│   compiles 0/0 · mainnet-fork tested 7/7           │
 ├──────────────────────────────────────────────────┤
-│            Python Workers (child_process)          │
-│  · jdl_engine — state machine executor            │
-│  · composite_brain — multi-strategy AI ensemble   │
-│  · ppo_engine — reinforcement learning agent       │
-│  · thompson_engine — Bayesian bandit explorer      │
-│  · ukf_engine — Kalman filter signal estimator    │
-│  · cma_es_engine — evolutionary param optimizer   │
-├──────────────────────────────────────────────────┤
-│            Smart Contracts (Solidity)              │
-│  · NexusFlashReceiver.sol — Aave V3 flash loan    │
-│  · ArbitrageLib.sol — path splitting lib          │
+│   revenue_system/  —  on-chain revenue tracking    │
+│   python/flash_supervisor.py — auto-restart daemon │
 └──────────────────────────────────────────────────┘
 ```
 
 ## Chains
 
-Ethereum · Arbitrum · Polygon · BSC · Optimism · Avalanche
+Arbitrum One (primary). Revenue monitor covers multiple chains.
 
-## Quick Start
+## Quick Start (Termux)
 
 ```bash
-cp .env.example .env   # edit with your RPC keys
-./scripts/setup.sh      # install deps, compile, build
-docker compose up       # or systemd for production
+# Python flash engine
+pkg install python git
+pip install -e python/        # installs the `flashloan` command
+flashloan                     # interactive engine — runs from any directory
+
+# Contracts (Foundry — recommended on Termux)
+curl -L https://foundry.paradigm.xyz | bash && foundryup
+cd contracts && forge install foundry-rs/forge-std
+ARB_RPC_URL=https://arb1.arbitrum.io/rpc forge test --match-path test/NexusFlashReceiver.t.sol -vv
 ```
+
+Full guides: [`README_FLASH.md`](README_FLASH.md) · [`TERMUX.md`](TERMUX.md) · [`contracts/README.md`](contracts/README.md)
+
+## Tests
+
+| Suite | Command | Result |
+|-------|---------|--------|
+| Python engine | `python3 -m jdl_flash.test_flash_engine` | 71/71 |
+| Contracts (Foundry) | `forge test` | 7/7 fork |
+| Contracts (Hardhat) | `npm run test:fork` | 7/7 fork |
 
 ## License
 
@@ -48,8 +66,7 @@ Proprietary — Copyright © 2026 Darcel King. All rights reserved.
 
 ### Revenue Tracking & Monitoring
 
-This project integrates the Omaga Revenue System for on-chain revenue tracking,
-RPC health monitoring, and reconciliation reporting.
+On-chain revenue tracking, RPC health monitoring, and reconciliation reporting.
 
 **Key modules:**
 - `revenue_system/revenue_recording.py` — Record flash arbitrage trades to SQLite
@@ -57,5 +74,3 @@ RPC health monitoring, and reconciliation reporting.
 - `revenue_system/revenue_reconciliation.py` — On-chain balance verification
 - `database/revenue_schema.sql` — Database schema (7 tables, auto-aggregation triggers)
 - `scripts/deploy_termux.sh` — Universal Termux deployment script
-
-See `docs/README_REVENUE_SYSTEM.md` for full documentation.
