@@ -12,6 +12,13 @@ requires-python = ">=3.9"
 dependencies = [
     "web3==5.31.4",
 ]
+# NOTE: after install you MUST override parsimonious — web3 5.31.4 pulls
+# parsimonious 0.8.x whose `from inspect import getargspec` was removed in
+# Python 3.9+, so `import web3` crashes on modern Python (incl. Termux 3.13) and
+# the engine reports "web3 not installed". It can't be a hard dependency here
+# (eth-abi 2.2.0 pins parsimonious<0.9.0 → pip ResolutionImpossible), so run:
+#     pip install --no-deps --upgrade 'parsimonious>=0.10'
+# The engine hand-rolls ABI encoding, so eth-abi's grammar is never used at runtime.
 
 [project.scripts]
 flashloan = "jdl_flash.flash_loan_engine:_run"
