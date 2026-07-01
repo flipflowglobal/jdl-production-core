@@ -7,18 +7,14 @@ name = "jdl-flash"
 version = "1.0.0"
 description = "Termux flash-loan arbitrage engine (Arbitrum One) with advanced math/ML toolkit"
 requires-python = ">=3.9"
-# web3 5.31.4 is the Termux-compatible pin (pure-Python, no Rust). The advanced
-# modules are stdlib-only; web3 is only needed for live on-chain quotes/execution.
+# web3 6.x is the Termux-safe line: unlike 5.31.4 it uses eth-abi 4.x (compatible
+# parsimonious — no getargspec crash) and drops the ipfshttpclient→psutil dep that
+# fails to build on Android. Verified 79/79 tests + live deploy on web3 6.20.4.
+# The engine's v5/v6 shims + hand-rolled ABI keep it working on either line.
+# The advanced modules are stdlib-only; web3 is only needed for on-chain quotes/exec.
 dependencies = [
-    "web3==5.31.4",
+    "web3>=6.0.0,<7",
 ]
-# NOTE: after install you MUST override parsimonious — web3 5.31.4 pulls
-# parsimonious 0.8.x whose `from inspect import getargspec` was removed in
-# Python 3.9+, so `import web3` crashes on modern Python (incl. Termux 3.13) and
-# the engine reports "web3 not installed". It can't be a hard dependency here
-# (eth-abi 2.2.0 pins parsimonious<0.9.0 → pip ResolutionImpossible), so run:
-#     pip install --no-deps --upgrade 'parsimonious>=0.10'
-# The engine hand-rolls ABI encoding, so eth-abi's grammar is never used at runtime.
 
 [project.scripts]
 flashloan = "jdl_flash.flash_loan_engine:_run"
@@ -26,3 +22,6 @@ flashpro  = "jdl_flash.flash_pro:main"
 
 [tool.setuptools]
 packages = ["jdl_flash"]
+
+[tool.setuptools.package-data]
+jdl_flash = ["artifacts/*.json"]
