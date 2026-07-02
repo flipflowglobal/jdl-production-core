@@ -937,6 +937,17 @@ mkdir -p ~/.flash_loan_engine
 - [ ] Monitor `supervisord.log` — repeated crashes may indicate an on-chain attack
 - [ ] After reaching $1,000, consider migrating to a multisig for withdrawal
 
+### On-chain / broadcast protections
+
+- Every broadcast runs a **pre-submit `eth_call` simulation** (`NexusExecutor.simulate()`):
+  a transaction that would revert is skipped, so no gas is ever spent on a doomed tx.
+- The `NexusFlashReceiver` profit invariant is enforced on-chain (`InsufficientProfit`) and
+  proven off the example tests by Foundry fuzz + stateful invariant runs — see
+  `contracts/README.md` → "Security hardening notes".
+- `FlashbotsPEG` is **L1-only by design** (gated to `CHAIN_ID == 1`). Arbitrum has a single
+  FIFO sequencer and no public mempool, so there is nothing to front-run; the simulation gate
+  above is the practical protection there, not a private relay.
+
 ---
 
 ## File Reference

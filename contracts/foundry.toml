@@ -17,5 +17,15 @@ remappings = [
     "forge-std/=lib/forge-std/src/",
 ]
 
+[fuzz]
+runs = 10000
+
+[invariant]
+runs = 256
+depth = 15
+# The handler intentionally swallows the (expected) reverts of unprofitable routes,
+# so a revert is not a failure — the invariant must still be asserted after each call.
+fail_on_revert = false
+
 [rpc_endpoints]
 arbitrum = "${ARB_RPC_URL}"

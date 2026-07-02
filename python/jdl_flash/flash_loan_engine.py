@@ -73,6 +73,8 @@ try:
     def _est_gas(w3, tx):
         try: return w3.eth.estimate_gas(tx)
         except AttributeError: return w3.eth.estimateGas(tx)
+    def _eth_call(w3, tx, block='latest'):
+        return w3.eth.call(tx, block_identifier=block)
 except ImportError:
     WEB3_OK = False
     def _w3_cs(a): return a
@@ -85,6 +87,7 @@ except ImportError:
     def _inject_poa(w): pass
     def _send_raw(w, raw): return None
     def _est_gas(w, tx): return 1_200_000
+    def _eth_call(w, tx, block='latest'): raise RuntimeError('web3 not installed')
 
 load_dotenv(os.path.expanduser('~/jdl/.env'))
 
@@ -1183,6 +1186,19 @@ def build_initiate_calldata(opp: 'Opportunity') -> Optional[str]:
 class NexusExecutor:
     """Broadcasts a real flash-loan arbitrage tx to NexusFlashReceiver on Arbitrum.
     Atomic safety: an unprofitable encoded route reverts on-chain (only gas is lost)."""
+    def simulate(self, w3, tx: dict) -> Tuple[bool, str]:
+        """Pre-flight eth_call simulation of `tx` against current chain state.
+        Returns (True, '') if the call would succeed, or (False, revert-reason)
+        if it would revert — without spending gas or broadcasting anything.
+        This is the practical MEV/gas protection on Arbitrum (whose sequencer
+        has no public mempool for a private relay to bypass): a doomed tx is
+        dropped before it wastes gas, rather than broadcast blind."""
+        try:
+            _eth_call(w3, tx, 'latest')
+            return True, ''
+        except Exception as e:
+            return False, str(e)
+
     def send(self, opp: 'Opportunity') -> Optional[str]:
         if not (PRIV_KEY and CONTRACT and WEB3_OK and requests is not None):
             return None
@@ -1195,6 +1211,11 @@ class NexusExecutor:
                 return None
             tx = {'to': _w3_cs(CONTRACT), 'from': acc.address, 'data': data,
                   'nonce': _nonce(w3, acc.address), 'chainId': CHAIN_ID, 'value': 0}
+            # T3: simulate before spending any gas. Skip broadcast if it would revert.
+            ok, reason = self.simulate(w3, tx)
+            if not ok:
+                logging.info(f'NexusExecutor: simulation reverted, skipping broadcast — {reason}')
+                return None
             try:
                 tx['gas'] = int(_est_gas(w3, tx) * 1.25)
             except Exception:

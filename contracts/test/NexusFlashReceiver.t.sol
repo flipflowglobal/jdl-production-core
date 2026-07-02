@@ -10,6 +10,7 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {NexusFlashReceiver} from "../contracts/NexusFlashReceiver.sol";
 import {ArbitrageLib} from "../contracts/ArbitrageLib.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract NexusFlashReceiverForkTest is Test {
     // ─── Real Arbitrum One addresses ───────────────────────────────────────
@@ -89,6 +90,37 @@ contract NexusFlashReceiverForkTest is Test {
 
         vm.prank(other);
         vm.expectRevert();
+        receiver.rescueETH(1, payable(other));
+
+        vm.prank(other);
+        vm.expectRevert();
         receiver.pause();
+    }
+
+    function test_RescueETH() public {
+        vm.deal(address(receiver), 1 ether);
+        uint256 before = address(this).balance;
+        receiver.rescueETH(1 ether, payable(address(this)));
+        assertEq(address(this).balance, before + 1 ether, "ETH not rescued");
+        assertEq(address(receiver).balance, 0, "receiver still holds ETH");
+    }
+
+    // Needed for test_RescueETH: the test contract is the owner/recipient.
+    receive() external payable {}
+
+    // PROPERTY: no fuzzed round-trip can complete while leaving the receiver poorer.
+    // Either the arb reverts (efficient market — the common case) or, if it somehow
+    // completes, the receiver's USDC balance must not have decreased. Fuzzes loan size
+    // across 1 USDC → 1M USDC and both legs' fee tiers across the three real Uni V3 tiers.
+    function testFuzz_RoundTripNeverLeavesLoss(uint256 loanUsdcRaw, uint8 feeAIdx, uint8 feeBIdx) public {
+        uint24[3] memory tiers = [uint24(500), uint24(3000), uint24(10000)];
+        uint256 loanAmount = bound(loanUsdcRaw, 1e6, 1_000_000e6);
+        ArbitrageLib.SwapStep[] memory s = new ArbitrageLib.SwapStep[](2);
+        s[0] = ArbitrageLib.SwapStep(0, address(0), USDC, WETH, tiers[feeAIdx % 3], 0, 0, 0, bytes32(0));
+        s[1] = ArbitrageLib.SwapStep(0, address(0), WETH, USDC, tiers[feeBIdx % 3], 0, 0, 0, bytes32(0));
+        uint256 balBefore = IERC20(USDC).balanceOf(address(receiver));
+        try receiver.initiateFlashLoan(USDC, loanAmount, abi.encode(s)) {
+            assertGe(IERC20(USDC).balanceOf(address(receiver)), balBefore, "loss on 'successful' arb");
+        } catch { /* expected: efficient market → most routes revert. Property: no loss ever completes. */ }
     }
 }
