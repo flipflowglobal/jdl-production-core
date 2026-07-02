@@ -26,7 +26,9 @@ FB_SECRET = os.getenv('FLASHBOTS_SECRET','')
 CONTRACT  = os.getenv('FLASH_CONTRACT_ADDRESS','')
 ALCH_ARB  = os.getenv('ALCHEMY_ARB_KEY','')
 BICON_K   = os.getenv('BICONOMY_API_KEY','')
-PAYMSTR   = os.getenv('PAYMASTER_ADDRESS','')
+PAYMASTER = os.getenv('PAYMASTER_ADDRESS','')
+# Bundler URL for the EIP-4337 path. Env-driven so no API key is committed to source.
+BICONOMY_BUNDLER_URL = os.getenv('BICONOMY_BUNDLER_URL', 'https://api.stackup.sh/v1/node/arb')
 
 RPC_ARB = f'https://arb-mainnet.g.alchemy.com/v2/{ALCH_ARB}' if ALCH_ARB else 'https://arb1.arbitrum.io/rpc'
 FLASHBOTS = 'https://relay.flashbots.net'
@@ -126,7 +128,7 @@ class BiconomyMetaTx:
 class EIP4337Paymaster:
     name = 'EIP4337_PAYMASTER'
     BUNDLERS = [
-        'https://bundler.biconomy.io/api/v2/42161/nJPK7B3ru.dd7f7861-190d-45ic-af80-6877f74b8f44',
+        BICONOMY_BUNDLER_URL,
         'https://api.stackup.sh/v1/node/arb',
     ]
     def __init__(self): self._w3=Web3(Web3.HTTPProvider(RPC_ARB)) if WEB3_OK else None

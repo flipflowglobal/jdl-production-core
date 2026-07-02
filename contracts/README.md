@@ -71,3 +71,52 @@ unprofitable round-trip so funds are never lost), and check owner/pause gating.
 | Aave V3 Pool | `0x794a61358D6845594F94dc1DB02A252b5b4814aD` |
 | Uniswap V3 SwapRouter | `0xE592427A0AEce92De3Edee1F18E0157C05861564` |
 | Balancer V2 Vault | `0xBA12222222228d8Ba445958a75a0704d566BF2C8` |
+
+---
+
+## Security hardening notes
+
+The on-chain profit invariant lives in `executeOperation`: after the swap sequence
+runs, the contract compares its `balanceOf(asset)` against the loan + Aave premium and
+reverts `InsufficientProfit` if the round-trip did not clear a profit, so borrowed funds
+can never leave at a loss. `executeOperation` is `nonReentrant onlyAavePool whenNotPaused`;
+`initiateFlashLoan` is owner-only.
+
+That invariant is proven three ways beyond the seven example fork tests:
+
+```bash
+# Property fuzz: no fuzzed round-trip completes while leaving the receiver poorer.
+ARB_RPC_URL=https://arb1.arbitrum.io/rpc \
+  forge test --match-test testFuzz_RoundTripNeverLeavesLoss --fuzz-runs 10000 -vv
+
+# Stateful invariants: receiver never retains a token balance, owner never changes.
+ARB_RPC_URL=https://arb1.arbitrum.io/rpc \
+  forge test --match-path test/NexusFlashReceiverInvariant.t.sol -vv
+```
+
+Fuzz/invariant depth is configured in `foundry.toml` (`runs = 10000`; invariant
+`runs = 256`, `depth = 15`, `fail_on_revert = false` — the handler deliberately swallows
+the expected reverts of unprofitable routes so the invariant is still asserted after each
+call).
+
+Static analysis (one-time, manual — no CI wired):
+
+```bash
+pip install slither-analyzer solc-select && solc-select install 0.8.20 && solc-select use 0.8.20
+slither . --filter-paths "FlashZeroGas.sol|ProfitPaymaster.sol|lib/|node_modules/" --exclude-informational
+```
+
+`ArbitrageLib`'s inline assembly (Uniswap V3 path encoding) is intentional; if Slither
+flags it, document rather than remove. Mythril is optional/best-effort only.
+
+### Why there is no private-relay / Flashbots integration
+
+On Ethereum L1, arbitrage bots submit through a private relay (Flashbots) to avoid being
+front-run in the public mempool. **That threat model does not apply on Arbitrum One.**
+Arbitrum has a single sequencer with FIFO ordering and no public gossip mempool, so there
+is no pending-tx stream for a searcher to observe and front-run. The `FlashbotsPEG` helper
+in the Python engine is real but gated to `CHAIN_ID == 1` and is dead code on Arbitrum by
+design. The practical pre-broadcast protection on Arbitrum is a pre-submit `eth_call`
+simulation (implemented in `NexusExecutor.simulate()`), which skips broadcasting — and
+spending gas on — any transaction that would revert. Arbitrum Timeboost (timed express-lane
+auctions) is a distinct, un-built future item, not a substitute for the simulation gate.
