@@ -30,7 +30,8 @@ describe("NexusFlashReceiver — Arbitrum mainnet fork", function () {
   before(async function () {
     [owner, other] = await ethers.getSigners();
     const Factory = await ethers.getContractFactory("NexusFlashReceiver");
-    receiver = await Factory.deploy(AAVE_V3_POOL, UNI_V3_ROUTER, BALANCER_VAULT);
+    // Constructor takes an explicit owner first; the deploying signer owns it here.
+    receiver = await Factory.deploy(owner.address, AAVE_V3_POOL, UNI_V3_ROUTER, BALANCER_VAULT);
     await receiver.waitForDeployment();
   });
 

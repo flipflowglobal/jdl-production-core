@@ -13,8 +13,12 @@ async function main() {
     process.exit(1);
   }
 
+  // Constructor takes an explicit owner first; the deploying signer owns it here
+  // (override with RECEIVER_OWNER to assign a different owner).
+  const OWNER = process.env.RECEIVER_OWNER || deployer.address;
+
   const NexusFlashReceiver = await hre.ethers.getContractFactory("NexusFlashReceiver");
-  const contract = await NexusFlashReceiver.deploy(AAVE_POOL, UNISWAP_V3_ROUTER, BALANCER_VAULT);
+  const contract = await NexusFlashReceiver.deploy(OWNER, AAVE_POOL, UNISWAP_V3_ROUTER, BALANCER_VAULT);
 
   await contract.waitForDeployment();
   console.log("NexusFlashReceiver deployed to:", await contract.getAddress());

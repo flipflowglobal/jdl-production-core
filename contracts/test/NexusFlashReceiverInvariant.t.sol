@@ -54,7 +54,7 @@ contract NexusFlashReceiverInvariantTest is Test {
         string memory rpc = vm.envOr("ARB_RPC_URL", string("https://arb1.arbitrum.io/rpc"));
         vm.createSelectFork(rpc);
         deployer = address(this);
-        receiver = new NexusFlashReceiver(AAVE_V3_POOL, UNI_V3_ROUTER, BALANCER_VAULT);
+        receiver = new NexusFlashReceiver(deployer, AAVE_V3_POOL, UNI_V3_ROUTER, BALANCER_VAULT);
         handler = new FlashHandler(receiver);
         // Only the handler's tryArb() is fuzzed — never the raw receiver.
         targetContract(address(handler));
