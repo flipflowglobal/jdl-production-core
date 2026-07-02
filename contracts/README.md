@@ -34,7 +34,7 @@ forge install OpenZeppelin/openzeppelin-contracts@v5.0.2   # OR reuse npm (see n
 ```bash
 forge build
 ARB_RPC_URL=https://arb1.arbitrum.io/rpc \
-  forge test --match-path test/NexusFlashReceiver.t.sol -vv     # 7/7 mainnet-fork
+  forge test --match-path test/NexusFlashReceiver.t.sol -vv     # 9 example + 1 fuzz, mainnet-fork
 ```
 
 ### Deploy
@@ -82,7 +82,7 @@ reverts `InsufficientProfit` if the round-trip did not clear a profit, so borrow
 can never leave at a loss. `executeOperation` is `nonReentrant onlyAavePool whenNotPaused`;
 `initiateFlashLoan` is owner-only.
 
-That invariant is proven three ways beyond the seven example fork tests:
+That invariant is proven three ways beyond the nine example fork tests:
 
 ```bash
 # Property fuzz: no fuzzed round-trip completes while leaving the receiver poorer.
@@ -108,6 +108,18 @@ slither . --filter-paths "FlashZeroGas.sol|ProfitPaymaster.sol|lib/|node_modules
 
 `ArbitrageLib`'s inline assembly (Uniswap V3 path encoding) is intentional; if Slither
 flags it, document rather than remove. Mythril is optional/best-effort only.
+
+**Slither triage (0.8.20, run 2026-07-02): 0 HIGH.** One MEDIUM was real and is fixed —
+`locked-ether` (`receive()` existed with no ETH withdrawal; `rescueETH` added; instances
+deployed *before* that function cannot rescue ETH — never send ETH to them). The remaining
+findings are documented intentional patterns, not defects:
+
+| Detector | Why it's intentional |
+|----------|---------------------|
+| `divide-before-multiply` (ArbitrageLib) | Byte-offset arithmetic in Uniswap V3 path decoding (`numHops * 23`) and the standard remainder computation in `splitSwap` — reconstructing offsets, not losing precision. |
+| `unused-return` (`_swapCurve`) | Curve pools don't return amounts consistently, so output is measured as a `balanceOf` delta — the return value is deliberately ignored. |
+| `write-after-write` (`safeApproveMax`) | The classic `approve(0)` → `approve(amount)` two-step required by USDT-like tokens. |
+| `calls-loop`, `timestamp` (LOW) | Inherent to multi-hop arbitrage execution; deadline checks use `block.timestamp` by design. |
 
 ### Why there is no private-relay / Flashbots integration
 

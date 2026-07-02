@@ -238,6 +238,19 @@ contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable {
         emit TokensRescued(token, amount, to);
     }
 
+    /**
+     * @notice Rescue stuck native ETH (the flash-loan path never holds ETH — WETH is
+     *         ERC20 — but receive() would otherwise trap any ETH sent by mistake).
+     *         NOTE: deployments made before this function exist cannot rescue ETH;
+     *         never send ETH to those instances.
+     */
+    function rescueETH(uint256 amount, address payable to) external onlyOwner {
+        require(to != address(0), "zero recipient");
+        emit TokensRescued(address(0), amount, to);
+        (bool ok, ) = to.call{value: amount}("");
+        require(ok, "eth transfer failed");
+    }
+
     function pause()   external onlyOwner { _pause(); }
     function unpause() external onlyOwner { _unpause(); }
 

@@ -90,8 +90,23 @@ contract NexusFlashReceiverForkTest is Test {
 
         vm.prank(other);
         vm.expectRevert();
+        receiver.rescueETH(1, payable(other));
+
+        vm.prank(other);
+        vm.expectRevert();
         receiver.pause();
     }
+
+    function test_RescueETH() public {
+        vm.deal(address(receiver), 1 ether);
+        uint256 before = address(this).balance;
+        receiver.rescueETH(1 ether, payable(address(this)));
+        assertEq(address(this).balance, before + 1 ether, "ETH not rescued");
+        assertEq(address(receiver).balance, 0, "receiver still holds ETH");
+    }
+
+    // Needed for test_RescueETH: the test contract is the owner/recipient.
+    receive() external payable {}
 
     // PROPERTY: no fuzzed round-trip can complete while leaving the receiver poorer.
     // Either the arb reverts (efficient market — the common case) or, if it somehow
