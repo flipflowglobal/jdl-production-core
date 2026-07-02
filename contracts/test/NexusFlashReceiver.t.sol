@@ -29,7 +29,7 @@ contract NexusFlashReceiverForkTest is Test {
         string memory rpc = vm.envOr("ARB_RPC_URL", string("https://arb1.arbitrum.io/rpc"));
         vm.createSelectFork(rpc);
         owner = address(this);
-        receiver = new NexusFlashReceiver(AAVE_V3_POOL, UNI_V3_ROUTER, BALANCER_VAULT);
+        receiver = new NexusFlashReceiver(owner, AAVE_V3_POOL, UNI_V3_ROUTER, BALANCER_VAULT);
     }
 
     function _steps(bool roundTrip) internal pure returns (bytes memory) {
@@ -95,6 +95,17 @@ contract NexusFlashReceiverForkTest is Test {
         vm.prank(other);
         vm.expectRevert();
         receiver.pause();
+    }
+
+    // The Gelato-relay entry point must reject any caller that is not the Gelato
+    // ERC-2771 relay forwarder — including the owner calling it directly.
+    function test_RelayEntryRejectsNonGelato() public {
+        vm.expectRevert(bytes("onlyGelatoRelayERC2771"));
+        receiver.initiateFlashLoanRelay(USDC, 1_000000, _steps(false), 1_000000);
+
+        vm.prank(other);
+        vm.expectRevert(bytes("onlyGelatoRelayERC2771"));
+        receiver.initiateFlashLoanRelay(USDC, 1_000000, _steps(false), 1_000000);
     }
 
     function test_RescueETH() public {

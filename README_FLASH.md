@@ -937,6 +937,16 @@ mkdir -p ~/.flash_loan_engine
 - [ ] Monitor `supervisord.log` — repeated crashes may indicate an on-chain attack
 - [ ] After reaching $1,000, consider migrating to a multisig for withdrawal
 
+### Gasless mode (Gelato Relay) — zero-ETH wallet
+
+Set `GELATO_ENABLED=1` in `~/jdl/.env` to run without ever holding ETH. Every arbitrage
+is submitted through Gelato Relay (ERC-2771 `callWithSyncFee`): Gelato pays the Arbitrum
+gas and is reimbursed from the trade's profit (in the loan asset), atomically. The fee is
+bounded by an owner-signed `maxFee`, so it can never exceed the profit — if it would, the
+trade reverts and nothing moves. One-time gasless deploy: `python3 -m jdl_flash.deploy_gelato`
+(needs `GELATO_SPONSOR_API_KEY` + ~$1 USDC in Gelato 1Balance). **Dry-run on Arbitrum
+Sepolia first** — Gelato sponsors testnet gas for free.
+
 ### On-chain / broadcast protections
 
 - Every broadcast runs a **pre-submit `eth_call` simulation** (`NexusExecutor.simulate()`):

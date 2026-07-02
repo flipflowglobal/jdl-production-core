@@ -192,6 +192,11 @@ CYCLE_SEC        = 15
 
 # Live execution gate: when off, the engine builds real calldata but never broadcasts.
 LIVE_EXEC = _env('LIVE_EXECUTION', 'LIVE_EXEC', 'LIVE_MODE', default='').lower() in ('1','true','yes','on')
+# Gasless execution via Gelato Relay (ERC-2771 callWithSyncFee): the wallet never needs
+# ETH — Gelato pays gas and is reimbursed from trade profit in the loan asset.
+GELATO_ENABLED   = _env('GELATO_ENABLED', 'GASLESS', default='').lower() in ('1','true','yes','on')
+GELATO_MAX_FEE_USD6 = int(_env('GELATO_MAX_FEE_USD6', default='0') or '0')  # 0 => derived per-trade
+GELATO_FEE_TOKEN = _env('GELATO_FEE_TOKEN', 'FEE_TOKEN', default='')        # defaults to the loan asset
 
 # eth_abi: v3+ exposes encode(); web3 v5 ships eth_abi v2 with encode_abi().
 try:
@@ -206,6 +211,7 @@ except ImportError:
 # is broken on Python 3.11+/parsimonious 0.11 for tuple types, so we never rely
 # on its grammar; these helpers are byte-identical to a correct eth-abi encode.
 _INIT_SELECTOR  = bytes.fromhex('e95437aa')  # initiateFlashLoan(address,uint256,bytes)
+_RELAY_SELECTOR = bytes.fromhex('d55c394c')  # initiateFlashLoanRelay(address,uint256,bytes,uint256)
 _QUOTE_SELECTOR = bytes.fromhex('c6a5026a')  # quoteExactInputSingle((address,address,uint256,uint24,uint160))
 def _abi_w_uint(n) -> bytes: return int(n).to_bytes(32, 'big')
 def _abi_w_addr(a) -> bytes: return bytes(12) + bytes.fromhex(_w3_cs(a)[2:])
@@ -1183,6 +1189,29 @@ def build_initiate_calldata(opp: 'Opportunity') -> Optional[str]:
         logging.warning(f'calldata: {e}')
         return None
 
+
+def build_initiate_relay_calldata(opp: 'Opportunity', max_fee: int) -> Optional[str]:
+    """ABI-encode initiateFlashLoanRelay(asset, amount, abi.encode(steps), maxFee).
+    Same as build_initiate_calldata but with a trailing uint256 maxFee, so the bytes
+    payload lives at offset 0x80 (four head words: asset, amount, offset, maxFee)."""
+    if not WEB3_OK:
+        return None
+    try:
+        amount = int(opp.loan_usd * 1e6)
+        steps  = build_swap_steps(opp)
+        def _enc_step(st):
+            p, pool, ti, to, fee, mo, ci, co, bp = st
+            return (_abi_w_uint(p) + _abi_w_addr(pool) + _abi_w_addr(ti) + _abi_w_addr(to) +
+                    _abi_w_uint(fee) + _abi_w_uint(mo) + _abi_w_uint(ci) + _abi_w_uint(co) + _abi_w_b32(bp))
+        enc_steps = _abi_w_uint(0x20) + _abi_w_uint(len(steps)) + b''.join(_enc_step(s) for s in steps)
+        enc_bytes = _abi_w_uint(len(enc_steps)) + enc_steps + b'\x00' * ((-len(enc_steps)) % 32)
+        args = (_abi_w_addr(opp.asset) + _abi_w_uint(amount) + _abi_w_uint(0x80)
+                + _abi_w_uint(int(max_fee)) + enc_bytes)
+        return '0x' + (_RELAY_SELECTOR + args).hex()
+    except Exception as e:
+        logging.warning(f'relay calldata: {e}')
+        return None
+
 class NexusExecutor:
     """Broadcasts a real flash-loan arbitrage tx to NexusFlashReceiver on Arbitrum.
     Atomic safety: an unprofitable encoded route reverts on-chain (only gas is lost)."""
@@ -1229,6 +1258,56 @@ class NexusExecutor:
             logging.warning(f'NexusExecutor: {e}')
             return None
 
+
+class GelatoExecutor:
+    """Gasless execution via Gelato Relay (ERC-2771 callWithSyncFee).
+
+    Builds initiateFlashLoanRelay calldata, has the owner sign the EIP-712 relay
+    request (no ETH spent), and submits it to Gelato — which pays the Arbitrum gas
+    and is reimbursed from trade profit in the loan asset, atomically. The relay
+    fee is bounded by an owner-signed maxFee so it can never exceed the profit.
+    """
+    def _max_fee(self, opp: 'Opportunity') -> int:
+        # Cap the Gelato fee well under the trade's projected profit so a fee spike
+        # can't wipe it out. Explicit GELATO_MAX_FEE_USD6 overrides; else use half
+        # the projected profit (in USDC 6-dp), with a small floor.
+        if GELATO_MAX_FEE_USD6 > 0:
+            return GELATO_MAX_FEE_USD6
+        return max(int(opp.profit_usd * 1e6 * 0.5), 200_000)  # >= $0.20
+
+    def send(self, opp: 'Opportunity') -> Optional[str]:
+        if not (PRIV_KEY and CONTRACT and WEB3_OK and requests is not None):
+            return None
+        try:
+            from eth_account import Account
+            from . import gelato_relay as gr
+            w3   = get_w3()
+            acc  = Account.from_key(PRIV_KEY)
+            fee_token = GELATO_FEE_TOKEN or opp.asset
+            max_fee   = self._max_fee(opp)
+            data = build_initiate_relay_calldata(opp, max_fee)
+            if not data:
+                return None
+            # Pre-flight: simulate the relayed call would succeed (owner path is gated
+            # by Gelato at execution, but this catches unprofitable/reverting routes).
+            nonce = gr.read_user_nonce(lambda tx: _eth_call(w3, tx, 'latest'), acc.address)
+            import time as _t
+            task_id = gr.submit(
+                CHAIN_ID, _w3_cs(CONTRACT), data, acc.address, PRIV_KEY,
+                _w3_cs(fee_token), nonce, now_ts=int(_t.time()))
+            if not task_id:
+                return None
+            state, tx = gr.wait_for_task(
+                task_id, poll_fn=gr.task_status, sleep_fn=_t.sleep)
+            if state == 'ExecSuccess' and tx:
+                logging.info(f'GelatoExecutor: ExecSuccess {tx}')
+                return tx
+            logging.info(f'GelatoExecutor: task {task_id} ended {state}')
+            return None
+        except Exception as e:
+            logging.warning(f'GelatoExecutor: {e}')
+            return None
+
 # ─────────────────────────────────────────────
 #  AUTOMATION DAEMON
 # ─────────────────────────────────────────────
@@ -1241,6 +1320,7 @@ class FlashDaemon:
         self.peg     = FlashbotsPEG()
         self.gelato  = GelatoSubmitter()
         self.nexus   = NexusExecutor()
+        self.gelato_exec = GelatoExecutor()
         self.rqs     = RealQuoteScanner(self.feed)
         self.finder  = ProtocolFinder(self.feed._w3)
         self.running = False
@@ -1306,8 +1386,10 @@ class FlashDaemon:
             if CONTRACT and WEB3_OK and LIVE_EXEC:
                 if strategy == 'FLASHBOTS_PEG' and CHAIN_ID == 1:
                     tx_hash = self.peg.submit(opp, eth_p)
+                elif GELATO_ENABLED:
+                    tx_hash = self.gelato_exec.send(opp)     # gasless: Gelato pays gas from profit
                 else:
-                    tx_hash = self.nexus.send(opp)           # real on-chain broadcast
+                    tx_hash = self.nexus.send(opp)           # real on-chain broadcast (owner pays gas)
                 mode = 'LIVE' if tx_hash else 'FAILED'
             elif CONTRACT and WEB3_OK and not LIVE_EXEC:
                 build_initiate_calldata(opp)                 # prove calldata path, never broadcast

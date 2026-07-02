@@ -65,7 +65,12 @@ def main():
     bytecode = art["bytecode"]
     if bytecode.startswith("0x"):
         bytecode = bytecode[2:]
-    ctor_args = (e._abi_w_addr(AAVE_V3_POOL)
+    # Constructor: (address _owner, address _aavePool, address _uniswapV3Router,
+    # address _balancerVault). On this direct-deploy path the deploying wallet is the
+    # owner. (The gasless Gelato deploy path sets _owner to the configured wallet so a
+    # relayer/factory can deploy while ownership still lands on the operator.)
+    ctor_args = (e._abi_w_addr(acct.address)
+                 + e._abi_w_addr(AAVE_V3_POOL)
                  + e._abi_w_addr(UNI_V3_ROUTER)
                  + e._abi_w_addr(BALANCER_VAULT)).hex()
     data = "0x" + bytecode + ctor_args

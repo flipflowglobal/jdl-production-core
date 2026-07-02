@@ -121,6 +121,43 @@ findings are documented intentional patterns, not defects:
 | `write-after-write` (`safeApproveMax`) | The classic `approve(0)` → `approve(amount)` two-step required by USDT-like tokens. |
 | `calls-loop`, `timestamp` (LOW) | Inherent to multi-hop arbitrage execution; deadline checks use `block.timestamp` by design. |
 
+### Gasless operation via Gelato Relay (ERC-2771)
+
+The contract has two entry points for the same flash-loan arbitrage:
+
+| Function | Caller | Who pays gas |
+|----------|--------|--------------|
+| `initiateFlashLoan(asset, amount, steps)` | owner (EOA) | the owner, in ETH |
+| `initiateFlashLoanRelay(asset, amount, steps, maxFee)` | Gelato Relay (ERC-2771) | Gelato, reimbursed from profit |
+
+The relay path lets the operator run the system with a **zero-ETH wallet**. Mechanics:
+
+- `executeOperation` no longer sweeps profit to the owner — it leaves profit in the
+  contract after Aave is repaid. The initiating function then forwards it: the direct
+  path sends all profit to the owner; the relay path first pays Gelato, then sweeps the
+  rest.
+- `initiateFlashLoanRelay` is gated by `onlyGelatoRelayERC2771` (only Gelato's forwarder,
+  `0xb539068872230f20456CF38EC52EF2f91AF4AE49` on Arbitrum, can call it) **and**
+  `require(_getMsgSender() == owner())` — the signer Gelato forwards must be the owner.
+  So only owner-signed requests execute.
+- The relayer fee is charged in the loan `asset` and bounded by an **owner-signed
+  `maxFee`** (`_transferRelayFeeCapped`). If profit can't cover the fee, the whole trade
+  reverts atomically — no funds move, no loss.
+- The Gelato relay context is **vendored** (`GelatoRelayERC2771Context` in the source),
+  not imported, because `@gelatonetwork/relay-context@4.1.1` uses `SafeERC20.safePermit`
+  which OpenZeppelin v5 removed. The forwarder address and calldata offsets are copied
+  verbatim from that package and cross-checked against `@gelatonetwork/relay-sdk@5.7.0`.
+
+The constructor takes an explicit `_owner` (not `msg.sender`) so the contract can be
+deployed **gaslessly** via a relayer/CREATE2 factory while ownership still lands on the
+operator. The Python side (`jdl_flash/gelato_relay.py`, `deploy_gelato.py`) builds and
+signs the EIP-712 relay requests; the wire format is transcribed 1:1 from the Gelato SDK
+and the signature is verified to recover to the owner offline.
+
+> ⚠️ The relay path must be dry-run on **Arbitrum Sepolia** (Gelato sponsors testnet gas
+> for free) before mainnet use — the off-chain Gelato submission cannot be exercised by
+> the fork tests.
+
 ### Why there is no private-relay / Flashbots integration
 
 On Ethereum L1, arbitrage bots submit through a private relay (Flashbots) to avoid being

@@ -13,6 +13,54 @@ import "./interfaces/IBalancerVault.sol";
 import "./ArbitrageLib.sol";
 
 /**
+ * @title GelatoRelayERC2771Context
+ * @notice Minimal, self-contained Gelato Relay (ERC-2771) context.
+ * @dev Vendored instead of importing the gelatonetwork/relay-context package because
+ *      that package (v4.1.1) uses SafeERC20.safePermit, which OpenZeppelin v5 removed —
+ *      it will not compile against this project's OZ ^5.6.1. The relay forwarder
+ *      address and the appended-calldata offsets below are copied verbatim from
+ *      gelatonetwork/relay-context v4.1.1:
+ *        - GELATO_RELAY_ERC2771_V1 (constants/GelatoRelay.sol) is the forwarder used
+ *          on Arbitrum One (42161) and Arbitrum Sepolia (421614), both of which map to
+ *          the V1 relay in the package's GelatoRelayContractsUtils.
+ *        - Gelato appends [feeCollector(20B)][feeToken(20B)][fee(32B)][msgSender(20B)]
+ *          to calldata, read from the tail at offsets 92/72/52/20.
+ *      This contract is Arbitrum-only, so the single V1 address is exact — no
+ *      per-chain resolution is needed.
+ */
+abstract contract GelatoRelayERC2771Context {
+    using SafeERC20 for IERC20;
+
+    address internal constant GELATO_RELAY_ERC2771 =
+        0xb539068872230f20456CF38EC52EF2f91AF4AE49;
+
+    modifier onlyGelatoRelayERC2771() {
+        require(msg.sender == GELATO_RELAY_ERC2771, "onlyGelatoRelayERC2771");
+        _;
+    }
+
+    function _getFeeCollector() internal pure returns (address r) {
+        assembly { r := shr(96, calldataload(sub(calldatasize(), 92))) }
+    }
+    function _getFeeToken() internal pure returns (address r) {
+        assembly { r := shr(96, calldataload(sub(calldatasize(), 72))) }
+    }
+    function _getFee() internal pure returns (uint256 r) {
+        assembly { r := calldataload(sub(calldatasize(), 52)) }
+    }
+    function _getMsgSender() internal pure returns (address r) {
+        assembly { r := shr(96, calldataload(sub(calldatasize(), 20))) }
+    }
+
+    /// @dev Reimburse Gelato from this contract's balance, bounded by `maxFee`.
+    function _transferRelayFeeCapped(uint256 maxFee) internal {
+        uint256 fee = _getFee();
+        require(fee <= maxFee, "relay fee > maxFee");
+        IERC20(_getFeeToken()).safeTransfer(_getFeeCollector(), fee);
+    }
+}
+
+/**
  * @title NexusFlashReceiver
  * @notice Production-grade flash loan arbitrage executor for Aave V3.
  *
@@ -34,7 +82,7 @@ import "./ArbitrageLib.sol";
  *   - Pausable for emergency stop
  *   - Custom errors for gas-efficient reverts
  */
-contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable {
+contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable, GelatoRelayERC2771Context {
     using SafeERC20 for IERC20;
     using ArbitrageLib for ArbitrageLib.SwapStep[];
 
@@ -70,11 +118,14 @@ contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable {
     uint256 private constant MAX_STEPS         = 8;
     uint256 private constant AAVE_PREMIUM_BPS  = 5; // 0.05% = 5 basis points
 
+    // `_owner` is explicit (not msg.sender) so the contract can be deployed by a
+    // Gelato relayer or a CREATE2 factory while ownership still lands on the operator.
     constructor(
+        address _owner,
         address _aavePool,
         address _uniswapV3Router,
         address _balancerVault
-    ) Ownable(msg.sender) {
+    ) Ownable(_owner) {
         require(_aavePool        != address(0), "zero aave pool");
         require(_uniswapV3Router != address(0), "zero router");
         require(_balancerVault   != address(0), "zero vault");
@@ -132,13 +183,12 @@ contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable {
 
         uint256 profit = finalBalance - totalOwed;
 
-        // Approve Aave repayment (SafeERC20 handles non-standard tokens)
+        // Approve Aave repayment (SafeERC20 handles non-standard tokens). Aave pulls
+        // `totalOwed` via transferFrom after this returns, leaving exactly `profit` in
+        // the contract. Profit is intentionally NOT swept here — the initiating call
+        // (initiateFlashLoan or initiateFlashLoanRelay) forwards it afterward, so the
+        // Gelato-relay path can first deduct the relayer fee from that profit.
         IERC20(asset).forceApprove(AAVE_POOL, totalOwed);
-
-        // Transfer profit to owner
-        if (profit > 0) {
-            IERC20(asset).safeTransfer(owner(), profit);
-        }
 
         uint256 gasUsed = gasStart - gasleft();
         emit ArbitrageExecuted(asset, amount, premium, profit, gasUsed, steps.length);
@@ -254,7 +304,9 @@ contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable {
     function pause()   external onlyOwner { _pause(); }
     function unpause() external onlyOwner { _unpause(); }
 
-    /// @notice Initiate a flash loan. Called by the Python engine.
+    /// @notice Initiate a flash loan directly (owner pays L2 gas in ETH).
+    ///         After the atomic flash loan repays Aave, all remaining profit in `asset`
+    ///         is swept to the owner.
     function initiateFlashLoan(
         address asset,
         uint256 amount,
@@ -267,6 +319,44 @@ contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable {
             encodedSteps,
             0 // referralCode
         );
+        _sweep(asset, owner());
+    }
+
+    /// @notice Gasless flash loan via Gelato Relay (ERC-2771). Gelato pays the L2 gas
+    ///         and is reimbursed from trade profit in `asset`; the remainder goes to
+    ///         the owner. The wallet never needs to hold ETH.
+    /// @dev    `onlyGelatoRelayERC2771` guarantees the caller is Gelato's relay contract,
+    ///         which appends the verified signer + fee context to calldata. We require
+    ///         that signer to be the owner, and that the fee is charged in `asset` (which
+    ///         the contract holds as profit). The fee is bounded by the owner-signed
+    ///         `maxFee`. Everything is atomic: if profit can't cover the fee, the trade
+    ///         reverts and no funds move.
+    /// @param maxFee Upper bound on the Gelato relayer fee, denominated in `asset`.
+    function initiateFlashLoanRelay(
+        address asset,
+        uint256 amount,
+        bytes calldata encodedSteps,
+        uint256 maxFee
+    ) external onlyGelatoRelayERC2771 whenNotPaused {
+        require(_getMsgSender() == owner(), "relay: not owner");
+        require(_getFeeToken()  == asset,   "relay: fee token != asset");
+        IAaveV3Pool(AAVE_POOL).flashLoanSimple(
+            address(this),
+            asset,
+            amount,
+            encodedSteps,
+            0 // referralCode
+        );
+        _transferRelayFeeCapped(maxFee); // reimburse Gelato from profit, bounded
+        _sweep(asset, owner());          // remainder to owner
+    }
+
+    /// @dev Forward the contract's full balance of `asset` to `to`.
+    function _sweep(address asset, address to) internal {
+        uint256 bal = IERC20(asset).balanceOf(address(this));
+        if (bal > 0) {
+            IERC20(asset).safeTransfer(to, bal);
+        }
     }
 
     receive() external payable {}
