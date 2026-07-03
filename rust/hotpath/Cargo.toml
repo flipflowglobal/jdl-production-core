@@ -1,0 +1,24 @@
+[package]
+name = "jdl-hotpath"
+version = "0.1.0"
+edition = "2021"
+description = "CPU hot-path for the JDL flash-loan system: fast arbitrage-cycle detection"
+license = "MIT"
+
+# Two artifacts from one crate: a library (unit-testable core) and a CLI binary
+# the Node orchestration server spawns.
+[lib]
+name = "jdl_hotpath"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jdl-hotpath"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
