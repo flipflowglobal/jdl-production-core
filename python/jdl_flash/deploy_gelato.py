@@ -21,10 +21,12 @@ from pathlib import Path
 from jdl_flash import flash_loan_engine as e
 from jdl_flash import gelato_relay as gr
 
-# Canonical Arbitrum One constructor args
-AAVE_V3_POOL   = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
-UNI_V3_ROUTER  = "0xE592427A0AEce92De3Edee1F18E0157C05861564"
-BALANCER_VAULT = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
+# Constructor args default to Arbitrum One, but are env-overridable so the same
+# script deploys to Arbitrum Sepolia (421614) for a testnet dry-run. See the
+# Sepolia runbook (docs/SEPOLIA_DRYRUN.md).
+AAVE_V3_POOL   = e._env('RECEIVER_AAVE_POOL',   default="0x794a61358D6845594F94dc1DB02A252b5b4814aD")
+UNI_V3_ROUTER  = e._env('RECEIVER_UNI_ROUTER',  default="0xE592427A0AEce92De3Edee1F18E0157C05861564")
+BALANCER_VAULT = e._env('RECEIVER_BALANCER_VAULT', default="0xBA12222222228d8Ba445958a75a0704d566BF2C8")
 
 # Arachnid's deterministic CREATE2 deployer — same address on every EVM chain,
 # including Arbitrum One. Calldata = salt(32 bytes) ++ initCode; it CREATE2-deploys
