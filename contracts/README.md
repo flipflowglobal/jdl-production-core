@@ -103,8 +103,10 @@ Static analysis (one-time, manual — no CI wired):
 
 ```bash
 pip install slither-analyzer solc-select && solc-select install 0.8.20 && solc-select use 0.8.20
-slither . --filter-paths "FlashZeroGas.sol|ProfitPaymaster.sol|lib/|node_modules/" --exclude-informational
+slither . --filter-paths "FlashZeroGas.sol|lib/|node_modules/" --exclude-informational
 ```
+
+(`FlashZeroGas.sol` stays excluded — still dormant/unwired and out of scope. `ProfitPaymaster.sol` was previously excluded too, but is now in scope — see below.)
 
 `ArbitrageLib`'s inline assembly (Uniswap V3 path encoding) is intentional; if Slither
 flags it, document rather than remove. Mythril is optional/best-effort only.
@@ -120,6 +122,37 @@ findings are documented intentional patterns, not defects:
 | `unused-return` (`_swapCurve`) | Curve pools don't return amounts consistently, so output is measured as a `balanceOf` delta — the return value is deliberately ignored. |
 | `write-after-write` (`safeApproveMax`) | The classic `approve(0)` → `approve(amount)` two-step required by USDT-like tokens. |
 | `calls-loop`, `timestamp` (LOW) | Inherent to multi-hop arbitrage execution; deadline checks use `block.timestamp` by design. |
+
+### ProfitPaymaster.sol — Chainlink pricing + corrected replay protection
+
+Still dormant/unwired (no Python path builds a UserOp for it — the live gasless path
+is the Gelato Relay integration below, not ERC-4337), but reviewed and hardened after
+an external "v2" reference design surfaced two real issues:
+
+- **Dynamic ETH/USD pricing** replaces a hardcoded `~$2000/ETH` in the profit-to-gas
+  ratio check with a live Chainlink `AggregatorV3` read (`getEthPrice()`), rejecting
+  stale or non-positive feed data. Genuinely useful — the hardcoded price would have
+  made the gas-ratio safety check silently wrong the moment ETH's real price moved.
+- **The reference design's replay protection was broken**: it computed the nonce hash
+  in `validatePaymasterUserOp` using the flash-contract address (`fc`), but recomputed
+  it in `postOp` using `address(0)` — a different hash, meaning the nonce the signature
+  check actually gates was never the one marked used. A signed request could be
+  replayed indefinitely. Fixed here by threading `fc` through `context` so both sides
+  hash the identical tuple. **Neither Slither nor the recovered EVM bytecode analyzer
+  (`jdl_native.analyze`) flagged this** — it's a semantic/dataflow bug, not a static
+  pattern, which is exactly why it needed a manual, line-by-line read rather than
+  tooling alone.
+- Signature recovery now goes through OpenZeppelin's audited `ECDSA.recover` instead
+  of hand-rolled assembly (the `\x19Ethereum Signed Message:\n32` prefix hash is
+  computed inline rather than via OZ's `MessageHashUtils`, which requires solc `^0.8.24`
+  — one library version ahead of this project's pinned `0.8.20`).
+
+Verified: compiles clean under the pinned solc 0.8.20 (`runs=200`, `via_ir`); Slither
+0 HIGH/MEDIUM; `jdl_native.analyze()` verdict `safe`, risk score 9/100; a self-contained
+Foundry suite (`test/ProfitPaymaster.t.sol`, no fork needed) covers valid/invalid
+signatures, stale/zero price feeds, the profit and profit:gas-ratio gates, owner
+gating, and — the regression test that matters — **replaying the exact same signed
+request after `postOp` now correctly reverts** with `"nonce used"`.
 
 ### Gasless operation via Gelato Relay (ERC-2771)
 
