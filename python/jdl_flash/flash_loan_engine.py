@@ -1494,6 +1494,7 @@ def print_menu():
   {C.CYAN}[o]{C.RESET} Optimal Loan Sizing (maximise profit, real)
   {C.CYAN}[t]{C.RESET} Triangular Scan (real 3-hop)
   {C.CYAN}[v]{C.RESET} Advanced Analytics (pattern/market/prediction)
+  {C.CYAN}[s]{C.RESET} Swarm Scan (maximum parallel, N workers)
   {C.CYAN}[0]{C.RESET} Exit
 """)
 
@@ -1892,6 +1893,97 @@ def menu_analytics():
     print(f"  Vol regime:    {C.CYAN}{regime['regime']}{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
+def build_live_coordinator(feed: 'PriceFeed', loan_usd: float, execute: bool):
+    """Construct a SwarmCoordinator wired to the live QuoterV2 and, if requested,
+    the real executor. Returns None if the swarm runtime or quoter isn't available."""
+    try:
+        from jdl_flash import swarm_runtime as sr
+    except Exception as e:
+        logging.warning(f'swarm_runtime unavailable: {e}')
+        return None
+    quoter = UniV3Quoter(getattr(feed, '_w3', None))
+    if not quoter.ready():
+        return None
+    gas_usd = 0.5  # Arbitrum L2 gas is sub-cent; conservative floor for net calc
+
+    def quote_edges_fn(route):
+        base, mid = route['base'], route['mid']
+        if base not in ADV_TOKENS or mid not in ADV_TOKENS:
+            return None
+        baddr, bdec = ADV_TOKENS[base]
+        maddr, mdec = ADV_TOKENS[mid]
+        loan_raw = int(loan_usd * (10 ** bdec))
+        out1 = quoter.quote(baddr, maddr, loan_raw, route['buy_fee'])
+        if not out1:
+            return None
+        out2 = quoter.quote(maddr, baddr, int(out1), route['sell_fee'])
+        if not out2:
+            return None
+        # Post-fee whole-token rates (the Quoter output already nets the pool fee),
+        # so we pass fee_bps=0 to the hot-path and carry the tier for execution.
+        rate1 = (out1 / 10 ** mdec) / (loan_raw / 10 ** bdec)
+        rate2 = (out2 / 10 ** bdec) / (out1 / 10 ** mdec)
+        return [
+            {'from': base, 'to': mid, 'rate': rate1, 'fee_bps': 0, 'fee_tier': route['buy_fee']},
+            {'from': mid, 'to': base, 'rate': rate2, 'fee_bps': 0, 'fee_tier': route['sell_fee']},
+        ]
+
+    execute_fn = None
+    if execute and CONTRACT and WEB3_OK and (PRIV_KEY or GELATO_ENABLED):
+        executor = GelatoExecutor() if GELATO_ENABLED else NexusExecutor()
+
+        def execute_fn(opp, nonce, lane):  # noqa: F811
+            path = opp.get('path', [])
+            fees = opp.get('fees', [])
+            if len(path) != 3 or len(fees) != 2 or None in fees:
+                return None  # only 2-hop base→mid→base is directly executable here
+            mid = path[1]
+            o = Opportunity(
+                type='SWARM', asset=ADV_TOKENS[path[0]][0], token_inter=ADV_TOKENS[mid][0],
+                loan_usd=loan_usd, profit_usd=float(opp.get('net_profit_usd', 0.0)),
+                buy_fee=int(fees[0]), sell_fee=int(fees[1]), dex_type=0,
+                vol=0.0, kelly_frac=0.0, source='UNISWAP_V3')
+            return executor.send(o)
+
+    return sr.SwarmCoordinator(
+        quote_edges_fn=quote_edges_fn, execute_fn=execute_fn,
+        tokens=list(ADV_TOKENS.keys()), base='USDC',
+        loan_usd=loan_usd, gas_usd=gas_usd, min_profit_usd=0.0)
+
+
+async def menu_swarm():
+    """Maximum-parallel scan: N workers each sweep a disjoint slice of the route
+    universe, deduped, using the Rust hot-path for cycle detection."""
+    from jdl_flash import swarm_runtime as sr
+    clear()
+    print(f"\n{C.BOLD}{C.CYAN}  ─── SWARM SCAN (parallel) ───{C.RESET}\n")
+    workers = sr.resolve_workers()
+    routes = len(sr.build_route_universe(list(ADV_TOKENS.keys()), base='USDC'))
+    live = LIVE_EXEC
+    print(f"  Workers:  {C.BCYAN}{workers}{C.RESET}  {C.DIM}(SWARM_WORKERS; 'max' → 4×cores≤32){C.RESET}")
+    print(f"  Universe: {C.CYAN}{routes}{C.RESET} routes  → {C.DIM}~{routes // workers} per worker/tick{C.RESET}")
+    print(f"  Execute:  {(C.BGREEN + 'LIVE') if live else (C.YELLOW + 'DRY (scan only)')}{C.RESET}"
+          f"  {C.DIM}(set LIVE_EXECUTION=1 to broadcast){C.RESET}\n")
+    feed = PriceFeed()
+    coord = build_live_coordinator(feed, REAL_LOAN_USD, execute=live)
+    if coord is None:
+        print(f"  {C.YELLOW}Live quoter not ready (check RPC / web3). Nothing to scan.{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    raw = input(f"  Scan rounds [3]: ").strip()
+    rounds = int(raw) if raw.isdigit() else 3
+    swarm = coord.make_swarm(workers)
+    print(f"\n  {C.DIM}Scanning {rounds} rounds across {workers} workers…{C.RESET}\n")
+    coord.reset_dedup()
+    await swarm.run(rounds=rounds, interval=1.0)
+    stats = swarm.stats()
+    total_scans = sum(s['scans'] for s in stats.values())
+    total_found = sum(s['found'] for s in stats.values())
+    total_exec = sum(s['executed'] for s in stats.values())
+    print(f"  {C.BGREEN}✓ done{C.RESET}  scans={total_scans}  opportunities={total_found}  executed={total_exec}")
+    print(f"  {C.DIM}(dedup ensures the same loop isn't chased by multiple workers){C.RESET}")
+    input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
+
+
 async def main():
     init_db()
     while True:
@@ -1915,6 +2007,7 @@ async def main():
         elif choice == 'o': menu_optimal_size()
         elif choice == 't': menu_triangular()
         elif choice == 'v': menu_analytics()
+        elif choice == 's': await menu_swarm()
         elif choice == '0': print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
         else: print(f"  {C.RED}Invalid option.{C.RESET}"); await asyncio.sleep(0.4)
 
