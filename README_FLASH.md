@@ -946,11 +946,24 @@ market per tick with zero overlap. Each worker feeds its real quotes to the Rust
 same loop (which would just make one revert). Set `SWARM_WORKERS=auto` (CPU cores),
 `max` (4×cores≤32), or an explicit count.
 
-Honest limits: scanning parallelism is real and bounded by CPU + RPC rate limits (the
-engine fails over across its RPC pool). **Execution from a single wallet is serialized
-on-chain by nonce order** — the swarm uses nonce lanes so submission is parallel, but the
-sequencer mines them in order; for genuinely parallel *execution* you need multiple
-wallets. Swarm scan is dry (scan-only) unless `LIVE_EXECUTION=1`.
+**The scanning is genuinely parallel**, not just cosmetic async bookkeeping: worker
+scan/execute calls are blocking network I/O (web3 HTTP calls), and `BotSwarm` runs each
+one in its own thread (`asyncio.to_thread`), so N workers' RPC round-trips actually
+overlap in wall-clock time — verified in `test_bot_swarm.py` (6 blocking workers finish
+in ~1 round-trip, not 6×).
+
+**Genuinely parallel execution** (not just scanning) requires multiple wallets — a single
+wallet's transactions are always serialized on-chain by nonce order no matter how many
+workers find opportunities. Configure `SWARM_KEYS` + `SWARM_CONTRACTS` (see
+`.env.template`): each wallet must own its **own** deployed `NexusFlashReceiver`
+instance (deploy one per wallet with `deploy_receiver.py`/`deploy_gelato.py`, passing
+that wallet as owner — no Solidity change needed, since a contract just has exactly one
+owner). Leave both unset to keep the single-wallet fallback (unchanged default
+behavior). A per-wallet lock serializes nonce-fetch+sign+broadcast for that wallet if
+more scan workers than wallets are configured, so two threads never race one wallet's
+nonce.
+
+Swarm scan is dry (scan-only) unless `LIVE_EXECUTION=1`.
 
 ### Gasless mode (Gelato Relay) — zero-ETH wallet
 

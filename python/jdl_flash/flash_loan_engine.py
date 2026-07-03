@@ -16,6 +16,7 @@ import math
 import hashlib
 import sqlite3
 import logging
+import threading
 import random
 import statistics
 import traceback
@@ -110,6 +111,12 @@ GELATO_KEY  = _env('GELATO_API_KEY')
 BICONOMY_K  = _env('BICONOMY_API_KEY')
 PAYMASTER   = _env('PAYMASTER_ADDRESS')
 CHAIN_ID    = int(_env('CHAIN_ID', default='42161') or '42161')
+# Multi-wallet swarm execution lanes (see wallet_lanes.py for why this needs one
+# deployed NexusFlashReceiver PER wallet, not a contract change): comma-separated
+# private keys + index-aligned contract addresses. Empty -> falls back to the
+# single PRIV_KEY/CONTRACT above (unchanged single-wallet behavior).
+SWARM_KEYS      = _env('SWARM_KEYS', default='')
+SWARM_CONTRACTS = _env('SWARM_CONTRACTS', default='')
 
 # ─ RPC resolution: build a PRIORITISED list with automatic failover ─
 # Order: your RPC_URL → your Alchemy key → any RPC_FALLBACKS → public node (last resort).
@@ -1228,17 +1235,23 @@ class NexusExecutor:
         except Exception as e:
             return False, str(e)
 
-    def send(self, opp: 'Opportunity') -> Optional[str]:
-        if not (PRIV_KEY and CONTRACT and WEB3_OK and requests is not None):
+    def send(self, opp: 'Opportunity', priv_key: Optional[str] = None,
+             contract: Optional[str] = None) -> Optional[str]:
+        """Broadcast on behalf of `priv_key`/`contract` if given (multi-wallet swarm
+        lanes), else the module-configured single wallet/contract (unchanged
+        single-wallet behavior)."""
+        priv_key = priv_key or PRIV_KEY
+        contract = contract or CONTRACT
+        if not (priv_key and contract and WEB3_OK and requests is not None):
             return None
         try:
             from eth_account import Account
             w3   = get_w3()
-            acc  = Account.from_key(PRIV_KEY)
+            acc  = Account.from_key(priv_key)
             data = build_initiate_calldata(opp)
             if not data:
                 return None
-            tx = {'to': _w3_cs(CONTRACT), 'from': acc.address, 'data': data,
+            tx = {'to': _w3_cs(contract), 'from': acc.address, 'data': data,
                   'nonce': _nonce(w3, acc.address), 'chainId': CHAIN_ID, 'value': 0}
             # T3: simulate before spending any gas. Skip broadcast if it would revert.
             ok, reason = self.simulate(w3, tx)
@@ -1275,14 +1288,20 @@ class GelatoExecutor:
             return GELATO_MAX_FEE_USD6
         return max(int(opp.profit_usd * 1e6 * 0.5), 200_000)  # >= $0.20
 
-    def send(self, opp: 'Opportunity') -> Optional[str]:
-        if not (PRIV_KEY and CONTRACT and WEB3_OK and requests is not None):
+    def send(self, opp: 'Opportunity', priv_key: Optional[str] = None,
+             contract: Optional[str] = None) -> Optional[str]:
+        """Relay on behalf of `priv_key`/`contract` if given (multi-wallet swarm
+        lanes), else the module-configured single wallet/contract (unchanged
+        single-wallet behavior)."""
+        priv_key = priv_key or PRIV_KEY
+        contract = contract or CONTRACT
+        if not (priv_key and contract and WEB3_OK and requests is not None):
             return None
         try:
             from eth_account import Account
             from . import gelato_relay as gr
             w3   = get_w3()
-            acc  = Account.from_key(PRIV_KEY)
+            acc  = Account.from_key(priv_key)
             fee_token = GELATO_FEE_TOKEN or opp.asset
             max_fee   = self._max_fee(opp)
             data = build_initiate_relay_calldata(opp, max_fee)
@@ -1293,7 +1312,7 @@ class GelatoExecutor:
             nonce = gr.read_user_nonce(lambda tx: _eth_call(w3, tx, 'latest'), acc.address)
             import time as _t
             task_id = gr.submit(
-                CHAIN_ID, _w3_cs(CONTRACT), data, acc.address, PRIV_KEY,
+                CHAIN_ID, _w3_cs(contract), data, acc.address, priv_key,
                 _w3_cs(fee_token), nonce, now_ts=int(_t.time()))
             if not task_id:
                 return None
@@ -1928,27 +1947,48 @@ def build_live_coordinator(feed: 'PriceFeed', loan_usd: float, execute: bool):
             {'from': mid, 'to': base, 'rate': rate2, 'fee_bps': 0, 'fee_tier': route['sell_fee']},
         ]
 
-    execute_fn = None
-    if execute and CONTRACT and WEB3_OK and (PRIV_KEY or GELATO_ENABLED):
-        executor = GelatoExecutor() if GELATO_ENABLED else NexusExecutor()
+    # Resolve execution lanes: multi-wallet if SWARM_KEYS is configured (genuine
+    # parallel on-chain execution — see wallet_lanes.py), else a single fallback
+    # lane from PRIV_KEY/CONTRACT (unchanged single-wallet behavior).
+    from jdl_flash import wallet_lanes as wl
+    try:
+        lanes = wl.build_lanes(SWARM_KEYS, SWARM_CONTRACTS,
+                                fallback_key=PRIV_KEY, fallback_contract=CONTRACT)
+    except wl.LaneConfigError as e:
+        logging.warning(f'swarm lane config error, falling back to single wallet: {e}')
+        lanes = wl.build_lanes('', '', fallback_key=PRIV_KEY, fallback_contract=CONTRACT)
+    n_wallets = max(1, len(lanes))
 
-        def execute_fn(opp, nonce, lane):  # noqa: F811
+    execute_fn = None
+    if execute and lanes and WEB3_OK and (PRIV_KEY or GELATO_ENABLED or SWARM_KEYS):
+        executor = GelatoExecutor() if GELATO_ENABLED else NexusExecutor()
+        # One lock per lane: send() does blocking network I/O and now runs on a
+        # background thread (BotSwarm._call uses asyncio.to_thread), so if
+        # n_workers > n_wallets, multiple scan workers can map to the SAME wallet —
+        # this lock keeps that wallet's nonce-fetch+sign+broadcast strictly
+        # serialized, preventing a nonce race between two threads on one wallet.
+        lane_locks = [threading.Lock() for _ in lanes]
+
+        def execute_fn(opp, nonce, lane_idx):  # noqa: F811
             path = opp.get('path', [])
             fees = opp.get('fees', [])
             if len(path) != 3 or len(fees) != 2 or None in fees:
                 return None  # only 2-hop base→mid→base is directly executable here
+            lane = lanes[lane_idx % len(lanes)]
             mid = path[1]
             o = Opportunity(
                 type='SWARM', asset=ADV_TOKENS[path[0]][0], token_inter=ADV_TOKENS[mid][0],
                 loan_usd=loan_usd, profit_usd=float(opp.get('net_profit_usd', 0.0)),
                 buy_fee=int(fees[0]), sell_fee=int(fees[1]), dex_type=0,
                 vol=0.0, kelly_frac=0.0, source='UNISWAP_V3')
-            return executor.send(o)
+            with lane_locks[lane_idx % len(lanes)]:
+                return executor.send(o, priv_key=lane.priv_key, contract=lane.contract)
 
     return sr.SwarmCoordinator(
         quote_edges_fn=quote_edges_fn, execute_fn=execute_fn,
         tokens=list(ADV_TOKENS.keys()), base='USDC',
-        loan_usd=loan_usd, gas_usd=gas_usd, min_profit_usd=0.0)
+        loan_usd=loan_usd, gas_usd=gas_usd, min_profit_usd=0.0,
+        n_wallets=n_wallets)
 
 
 async def menu_swarm():
