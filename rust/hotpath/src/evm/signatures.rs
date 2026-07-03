@@ -138,8 +138,8 @@ pub fn recover_signatures(disasm: &Disassembly) -> SignatureReport {
                                 .map(|v| v as usize)
                         });
 
-                    if !seen_selectors.contains_key(&sel) {
-                        seen_selectors.insert(sel, functions.len());
+                    if let std::collections::hash_map::Entry::Vacant(e) = seen_selectors.entry(sel) {
+                        e.insert(functions.len());
                         functions.push(FunctionSig {
                             selector:     format!("0x{:08x}", sel),
                             selector_u32: sel,

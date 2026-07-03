@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e python/
+      - name: Flash engine suite
+        run: python3 python/jdl_flash/test_flash_engine.py
+      - name: Swarm runtime suite
+        run: python3 python/jdl_flash/test_swarm_runtime.py
+      - name: Bot swarm suite
+        run: python3 python/jdl_flash/test_bot_swarm.py
+      - name: Wallet lanes suite
+        run: python3 python/jdl_flash/test_wallet_lanes.py
+      - name: Swarm wiring suite
+        run: python3 python/jdl_flash/test_swarm_wiring.py
+      - name: Native binding suite
+        run: python3 python/jdl_native/test_jdl_native.py
+
+  rust:
+    name: Rust hotpath
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: cargo test
+        working-directory: rust/hotpath
+        run: cargo test
+      - name: cargo clippy
+        working-directory: rust/hotpath
+        run: cargo clippy --all-targets -- -D warnings
+
+  node:
+    name: Node server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install deps
+        working-directory: node
+        run: npm ci || npm install
+      - name: npm test
+        working-directory: node
+        run: npm test
+
+  solidity:
+    name: Solidity contracts
+    runs-on: ubuntu-latest
+    # continue-on-error: Hardhat downloads the solc 0.8.20 binary and resolves
+    # OpenZeppelin imports at compile time; if the network fetch or a peer-dep
+    # resolution hiccups in CI we don't want it to fail the whole pipeline.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install deps
+        working-directory: contracts
+        run: npm ci || npm install
+      - name: Compile contracts (Hardhat + solc 0.8.20)
+        working-directory: contracts
+        run: npm run compile

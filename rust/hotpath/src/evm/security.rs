@@ -198,7 +198,7 @@ pub fn analyze_security(disasm: &Disassembly) -> SecurityReport {
             0x42 => {
                 // Timestamp used in comparison
                 let next_is_cmp = i + 1 < n && matches!(
-                    instrs[i+1].opcode, 0x10|0x11|0x12|0x13|0x14|0x15
+                    instrs[i+1].opcode, 0x10..=0x15
                 );
                 if next_is_cmp {
                     findings.push(finding(
@@ -218,8 +218,13 @@ pub fn analyze_security(disasm: &Disassembly) -> SecurityReport {
                     // Non-zero, non-contract-self address pushed
                     let is_zero = hex.chars().all(|c| c == '0');
                     if !is_zero {
-                        let near_call = instrs[i..].iter().take(10)
-                            .any(|x| x.opcode == 0xf1 || x.opcode == 0xa9059cbb_u32 as u8);
+                        // A hardcoded address is noteworthy when it feeds a value
+                        // transfer: either a raw CALL (0xf1) or a PUSH4 of the ERC20
+                        // `transfer(address,uint256)` selector 0xa9059cbb (0x63 = PUSH4).
+                        let near_call = instrs[i..].iter().take(10).any(|x| {
+                            x.opcode == 0xf1
+                                || (x.opcode == 0x63 && x.imm_u256 == Some(0xa9059cbb))
+                        });
                         if near_call {
                             findings.push(finding(
                                 Severity::Info,

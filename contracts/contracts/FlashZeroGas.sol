@@ -2,6 +2,9 @@
 pragma solidity ^0.8.20;
 
 // ============================================================
+// EXPERIMENTAL — NOT DEPLOYED. Not audited for production.
+// Do not deploy without a full audit.
+// ============================================================
 // FlashZeroGas.sol — Zero-upfront-gas flash loan arbitrage
 // Novel methods: PEG (block.coinbase), Recursive Flash Stack,
 // TWAP lag exploitation, Morpho/Balancer 0%-fee flash loans
@@ -127,6 +130,10 @@ contract FlashZeroGas {
         address tokenInter, uint24 buyFee, uint24 sellFee, uint8 dexType,
         uint256 minProfit, uint256 builderFee
     ) external onlyOwner {
+        // NOTE: MORPHO_BLUE is address(0) on this (Arbitrum) build — Morpho Blue is
+        // Ethereum-L1 only. Guard so calls fail fast with a clear reason instead of
+        // silently reverting inside the zero-address call. Set MORPHO_BLUE before use.
+        require(MORPHO_BLUE != address(0), "morpho unset");
         IMorpho(MORPHO_BLUE).flashLoan(token, assets,
             abi.encode(tokenInter,buyFee,sellFee,dexType,minProfit,builderFee,token,assets));
     }
@@ -135,8 +142,13 @@ contract FlashZeroGas {
 
     function executeOperation(
         address asset, uint256 amount, uint256 premium,
-        address, bytes calldata params
+        address initiator, bytes calldata params
     ) external returns (bool) {
+        // Authenticate the Aave flash-loan callback: only a canonical Aave pool may
+        // invoke it, and the loan must have been initiated by this contract itself.
+        // Mirrors NexusFlashReceiver's onlyAavePool + initiator==address(this) guard.
+        require(msg.sender == AAVE_POOL_ARB || msg.sender == AAVE_POOL_ETH, "!aavePool");
+        require(initiator == address(this), "!initiator");
         (address ti, uint24 bf, uint24 sf, uint8 dt, uint256 mp, uint256 bfee) =
             abi.decode(params,(address,uint24,uint24,uint8,uint256,uint256));
         uint256 profit = _arb(asset,amount,ti,bf,sf,dt);
@@ -152,6 +164,11 @@ contract FlashZeroGas {
         address[] calldata tokens, uint256[] calldata amounts,
         uint256[] calldata feeAmounts, bytes calldata userData
     ) external {
+        // Balancer's Vault does not pass an initiator to the recipient, so the
+        // strongest available authentication is msg.sender == the canonical Vault.
+        // A third party could still call Vault.flashLoan(recipient=this,...) with
+        // arbitrary userData; the profit>=min check below reverts unprofitable
+        // attempts, so the worst case is griefing (wasted gas), not loss of funds.
         require(msg.sender==BALANCER_VAULT,"!balancer");
         (address ti,uint24 bf,uint24 sf,uint8 dt,uint256 mp,uint256 bfee) =
             abi.decode(userData,(address,uint24,uint24,uint8,uint256,uint256));
@@ -166,6 +183,13 @@ contract FlashZeroGas {
     function uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes calldata data) external {
         (address pool,address ti,uint24 bf,uint24 sf,uint8 dt,uint256 mp,uint256 bfee) =
             abi.decode(data,(address,address,uint24,uint24,uint8,uint256,uint256));
+        // `pool` is decoded from caller-supplied data, so require(msg.sender==pool)
+        // only proves the caller named itself — it does NOT prove msg.sender is a
+        // genuine Uniswap V3 pool. Full authentication requires recomputing the pool
+        // address via the factory + CREATE2 PoolKey (token0,token1,fee) and checking
+        // it equals msg.sender. That is omitted here (needs the factory/init-code
+        // hash); as with Balancer, the profit>=min guard below makes a spoofed-pool
+        // callback a griefing vector at worst, not a fund-loss vector.
         require(msg.sender==pool,"!pool");
         address t0 = IUniswapV3Pool(pool).token0();
         address t1 = IUniswapV3Pool(pool).token1();
@@ -231,6 +255,14 @@ contract FlashZeroGas {
         address assetIn, uint256 amountIn,
         address tokenInter, uint24 buyFee, uint24 sellFee, uint8 dexType
     ) internal returns (uint256 totalOut) {
+        // NOTE (slippage): every per-hop swap below passes amountOutMinimum = 0, so
+        // individual hops have no slippage floor — only the aggregate `minProfit`
+        // check in each callback guards the round trip. On Arbitrum One's public
+        // sequencer (and any public mempool) this is sandwichable: an attacker can
+        // move mid-swap price and still leave the aggregate barely >= minProfit.
+        // Production use should pass real per-hop minOut values (quoted off-chain)
+        // and/or rely on pre-submit simulation + private orderflow. Left as 0 here
+        // because this contract is experimental and unwired.
         IERC20(assetIn).approve(UNIV3_ROUTER, amountIn);
         uint256 mid;
         if (dexType == 0) {
@@ -296,5 +328,5 @@ contract FlashZeroGas {
     function setBuilderFeeBps(uint16 b) external onlyOwner { builderFeeBps=b; }
     function setGasReserveBps(uint16 b) external onlyOwner { gasReserveBps=b; }
     function setWithdrawThreshold(uint256 v) external onlyOwner { withdrawThresholdUSD6=v; }
-    function transferOwnership(address n) external onlyOwner { owner=n; }
+    function transferOwnership(address n) external onlyOwner { require(n != address(0), "zero owner"); owner=n; }
 }

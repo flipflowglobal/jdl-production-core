@@ -119,7 +119,7 @@ impl Val {
                 (Val::Const(x), Val::Const(y)) => Val::Const(x & y),
                 // AND with address mask (20 bytes = 0xffffffffffffffffffffffffffffffffffffffff)
                 (Val::Const(x), fb) if x == 0xffffffffffffffff => Val::And(Box::new(Val::Const(x)), Box::new(fb)),
-                (_fa, Val::Const(y)) if y == 0 => Val::Const(0),
+                (_fa, Val::Const(0)) => Val::Const(0),
                 (fa, fb) => Val::And(Box::new(fa), Box::new(fb)),
             },
             Val::Or(a, b) => match (a.fold(), b.fold()) {
@@ -302,8 +302,7 @@ impl Val {
             Val::CreateAddr  => "new Contract(...)".into(),
             Val::Create2Addr { salt } => format!("new Contract{{salt: {}}}(...)", salt.render()),
 
-            Val::Param { index, ty } =>
-                format!("{}", param_name(*index, ty)),
+            Val::Param { index, ty } => param_name(*index, ty),
 
             Val::Local(name)  => name.clone(),
             Val::Phi(vals) => {
@@ -341,6 +340,10 @@ fn param_name(index: usize, ty: &EvmType) -> String {
 #[derive(Clone, Debug)]
 pub struct SymStack {
     items: Vec<Val>,
+}
+
+impl Default for SymStack {
+    fn default() -> Self { Self::new() }
 }
 
 impl SymStack {

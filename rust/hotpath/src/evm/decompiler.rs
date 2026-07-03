@@ -216,11 +216,11 @@ fn reconstruct_params(group: &FnGroup) -> Vec<ParamOut> {
         let inner = &group.name[start+1..end];
         inner.split(',').map(str::trim).map(|t| {
             if t == "address" { EvmType::Address }
-            else if t.starts_with("uint") { EvmType::Uint(t[4..].parse().unwrap_or(256)) }
-            else if t.starts_with("int")  { EvmType::Int(t[3..].parse().unwrap_or(256)) }
+            else if let Some(w) = t.strip_prefix("uint") { EvmType::Uint(w.parse().unwrap_or(256)) }
+            else if let Some(w) = t.strip_prefix("int")  { EvmType::Int(w.parse().unwrap_or(256)) }
             else if t == "bool"   { EvmType::Bool }
             else if t == "bytes"  { EvmType::BytesDynamic }
-            else if t.starts_with("bytes") { EvmType::Bytes(t[5..].parse().unwrap_or(32)) }
+            else if let Some(w) = t.strip_prefix("bytes") { EvmType::Bytes(w.parse().unwrap_or(32)) }
             else { EvmType::Unknown }
         }).collect()
     }).unwrap_or_default();

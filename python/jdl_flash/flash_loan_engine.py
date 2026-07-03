@@ -76,6 +76,9 @@ try:
         except AttributeError: return w3.eth.estimateGas(tx)
     def _eth_call(w3, tx, block='latest'):
         return w3.eth.call(tx, block_identifier=block)
+    def _wait_receipt(w3, tx_hash, timeout=180):
+        try: return w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
+        except AttributeError: return w3.eth.waitForTransactionReceipt(tx_hash, timeout=timeout)
 except ImportError:
     WEB3_OK = False
     def _w3_cs(a): return a
@@ -89,6 +92,7 @@ except ImportError:
     def _send_raw(w, raw): return None
     def _est_gas(w, tx): return 1_200_000
     def _eth_call(w, tx, block='latest'): raise RuntimeError('web3 not installed')
+    def _wait_receipt(w, tx_hash, timeout=180): return None
 
 load_dotenv(os.path.expanduser('~/jdl/.env'))
 
@@ -345,7 +349,7 @@ PROTOCOLS: Dict[str, dict] = {
 
 # token addresses on Arbitrum One
 _TOKEN_ADDR = {
-    'USDC': '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8',
+    'USDC': USDC_NATIVE,   # native USDC — the asset this engine actually trades
     'WETH': '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
     'WBTC': '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f',
     'DAI':  '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1',
@@ -543,15 +547,18 @@ def init_db():
 
 def db_exec(sql: str, params: tuple = ()):
     con = sqlite3.connect(DB_PATH)
-    con.execute(sql, params)
-    con.commit()
-    con.close()
+    try:
+        con.execute(sql, params)
+        con.commit()
+    finally:
+        con.close()
 
 def db_query(sql: str, params: tuple = ()) -> list:
     con = sqlite3.connect(DB_PATH)
-    rows = con.execute(sql, params).fetchall()
-    con.close()
-    return rows
+    try:
+        return con.execute(sql, params).fetchall()
+    finally:
+        con.close()
 
 # ─────────────────────────────────────────────
 #  MATHEMATICAL ALGORITHMS
@@ -954,7 +961,7 @@ class OpportunityScanner:
              datetime.now().isoformat()))
         return Opportunity(
             type='CROSS_DEX_SPOT',
-            asset='0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8',
+            asset=USDC_NATIVE,
             token_inter='0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
             loan_usd=sized, profit_usd=s_prof,
             buy_fee=500, sell_fee=3000, dex_type=1,
@@ -1273,10 +1280,12 @@ class NexusExecutor:
             return False, str(e)
 
     def send(self, opp: 'Opportunity', priv_key: Optional[str] = None,
-             contract: Optional[str] = None) -> Optional[str]:
+             contract: Optional[str] = None, nonce: Optional[int] = None) -> Optional[str]:
         """Broadcast on behalf of `priv_key`/`contract` if given (multi-wallet swarm
         lanes), else the module-configured single wallet/contract (unchanged
-        single-wallet behavior)."""
+        single-wallet behavior). `nonce`, when supplied by the swarm coordinator,
+        is the caller-reserved nonce for this wallet's lane and MUST be honored so
+        parallel lanes don't collide; when None we fetch it as before."""
         priv_key = priv_key or PRIV_KEY
         contract = contract or CONTRACT
         if not (priv_key and contract and WEB3_OK and requests is not None):
@@ -1288,8 +1297,9 @@ class NexusExecutor:
             data = build_initiate_calldata(opp)
             if not data:
                 return None
+            tx_nonce = nonce if nonce is not None else _nonce(w3, acc.address)
             tx = {'to': _w3_cs(contract), 'from': acc.address, 'data': data,
-                  'nonce': _nonce(w3, acc.address), 'chainId': CHAIN_ID, 'value': 0}
+                  'nonce': tx_nonce, 'chainId': CHAIN_ID, 'value': 0}
             # T3: simulate before spending any gas. Skip broadcast if it would revert.
             ok, reason = self.simulate(w3, tx)
             if not ok:
@@ -1326,10 +1336,12 @@ class GelatoExecutor:
         return max(int(opp.profit_usd * 1e6 * 0.5), 200_000)  # >= $0.20
 
     def send(self, opp: 'Opportunity', priv_key: Optional[str] = None,
-             contract: Optional[str] = None) -> Optional[str]:
+             contract: Optional[str] = None, nonce: Optional[int] = None) -> Optional[str]:
         """Relay on behalf of `priv_key`/`contract` if given (multi-wallet swarm
         lanes), else the module-configured single wallet/contract (unchanged
-        single-wallet behavior)."""
+        single-wallet behavior). `nonce` is accepted for call-signature parity with
+        NexusExecutor but intentionally IGNORED: Gelato tracks its own userNonce
+        (read below), so the caller's EVM lane nonce does not apply here."""
         priv_key = priv_key or PRIV_KEY
         contract = contract or CONTRACT
         if not (priv_key and contract and WEB3_OK and requests is not None):
@@ -1363,6 +1375,27 @@ class GelatoExecutor:
         except Exception as e:
             logging.warning(f'GelatoExecutor: {e}')
             return None
+
+def _receipt_status(tx_hash, timeout: int = 180) -> Optional[int]:
+    """On-chain confirmation for a just-broadcast tx. Returns 1 (mined & success),
+    0 (reverted), or None (timeout / error / no live connection).
+
+    Real-data-only guard: a broadcast tx hash is NOT proof the trade succeeded —
+    the tx can still revert on-chain. Callers must confirm status==1 before
+    recording revenue. This reads ONLY the already-cached web3 singleton (it never
+    opens a new connection), so when there is no live w3 — e.g. in unit tests — it
+    no-ops to None and never touches the network."""
+    if not (WEB3_OK and tx_hash and _W3_SINGLETON is not None):
+        return None
+    try:
+        rcpt = _wait_receipt(_W3_SINGLETON, tx_hash, timeout)
+        if rcpt is None:
+            return None
+        status = rcpt.get('status') if hasattr(rcpt, 'get') else getattr(rcpt, 'status', None)
+        return int(status) if status is not None else None
+    except Exception as ex:
+        logging.warning(f'receipt confirmation failed for {tx_hash}: {ex}')
+        return None
 
 # ─────────────────────────────────────────────
 #  AUTOMATION DAEMON
@@ -1443,9 +1476,23 @@ class FlashDaemon:
                 if strategy == 'FLASHBOTS_PEG' and CHAIN_ID == 1:
                     tx_hash = self.peg.submit(opp, eth_p)
                 elif GELATO_ENABLED:
-                    tx_hash = self.gelato_exec.send(opp)     # gasless: Gelato pays gas from profit
+                    # Gasless: Gelato pays gas from profit and only returns a tx
+                    # once it has waited for ExecSuccess, so the hash is already
+                    # an on-chain-confirmed execution.
+                    tx_hash = self.gelato_exec.send(opp)
                 else:
                     tx_hash = self.nexus.send(opp)           # real on-chain broadcast (owner pays gas)
+                    # Real-data-only fix: a broadcast hash is NOT proof of success —
+                    # the tx can still revert. Await the receipt and only keep
+                    # tx_hash (→ record revenue) if it mined with status==1. A
+                    # revert/timeout nulls it, so mode becomes FAILED and nothing
+                    # is recorded. (profit_usd remains the PROJECTED quote-time
+                    # figure pending on-chain reconciliation — see
+                    # revenue_reconciliation.py.)
+                    if tx_hash and _receipt_status(tx_hash) != 1:
+                        logging.warning(f'cycle: broadcast {tx_hash} did not confirm '
+                                        f'status==1 — not recording revenue')
+                        tx_hash = None
                 mode = 'LIVE' if tx_hash else 'FAILED'
             elif CONTRACT and WEB3_OK and not LIVE_EXEC:
                 build_initiate_calldata(opp)                 # prove calldata path, never broadcast
@@ -2000,6 +2047,18 @@ def build_live_coordinator(feed: 'PriceFeed', loan_usd: float, execute: bool):
     execute_fn = None
     if execute and lanes and WEB3_OK and (PRIV_KEY or GELATO_ENABLED or SWARM_KEYS):
         executor = GelatoExecutor() if GELATO_ENABLED else NexusExecutor()
+        # Only thread the swarm lane nonce into send() if that executor accepts it.
+        # The real NexusExecutor/GelatoExecutor do (GelatoExecutor ignores it); test
+        # fakes may not, so we probe the signature rather than risk a TypeError that
+        # could mask a real error or trigger a double-broadcast retry.
+        import inspect as _inspect
+        try:
+            _send_params = _inspect.signature(executor.send).parameters
+            _send_takes_nonce = ('nonce' in _send_params or
+                                 any(p.kind == _inspect.Parameter.VAR_KEYWORD
+                                     for p in _send_params.values()))
+        except (TypeError, ValueError):
+            _send_takes_nonce = False
         # One lock per lane: send() does blocking network I/O and now runs on a
         # background thread (BotSwarm._call uses asyncio.to_thread), so if
         # n_workers > n_wallets, multiple scan workers can map to the SAME wallet —
@@ -2014,13 +2073,38 @@ def build_live_coordinator(feed: 'PriceFeed', loan_usd: float, execute: bool):
                 return None  # only 2-hop base→mid→base is directly executable here
             lane = lanes[lane_idx % len(lanes)]
             mid = path[1]
+            # jdl_native.scan emits realized net as 'net_profit_usd'; use that exact
+            # key so recorded profit isn't silently 0.
             o = Opportunity(
                 type='SWARM', asset=ADV_TOKENS[path[0]][0], token_inter=ADV_TOKENS[mid][0],
                 loan_usd=loan_usd, profit_usd=float(opp.get('net_profit_usd', 0.0)),
                 buy_fee=int(fees[0]), sell_fee=int(fees[1]), dex_type=0,
                 vol=0.0, kelly_frac=0.0, source='UNISWAP_V3')
             with lane_locks[lane_idx % len(lanes)]:
-                return executor.send(o, priv_key=lane.priv_key, contract=lane.contract)
+                # Honor the lane's reserved nonce (nonce-lane safety) when supported.
+                if _send_takes_nonce:
+                    tx_hash = executor.send(o, priv_key=lane.priv_key,
+                                            contract=lane.contract, nonce=nonce)
+                else:
+                    tx_hash = executor.send(o, priv_key=lane.priv_key,
+                                            contract=lane.contract)
+            if not tx_hash:
+                return None
+            # Real-data-only audit trail (mirrors cycle_run): a broadcast hash is
+            # not proof of success. Gelato already waited for ExecSuccess; the
+            # direct (Nexus) path must confirm status==1 before recording.
+            # _receipt_status no-ops to None with no live w3, so tests never hit the
+            # network (and simply don't record — which the wiring tests don't check).
+            if not GELATO_ENABLED and _receipt_status(tx_hash) != 1:
+                return None
+            # profit_usd is the PROJECTED quote-time figure pending on-chain
+            # reconciliation (revenue_reconciliation.py).
+            try:
+                RevenueTracker.log('SWARM', 'SWARM', o.asset, o.loan_usd,
+                                   o.profit_usd, gas_usd, tx_hash, 1)
+            except Exception as _log_err:
+                logging.warning(f'swarm revenue log failed: {_log_err}')
+            return tx_hash
 
     return sr.SwarmCoordinator(
         quote_edges_fn=quote_edges_fn, execute_fn=execute_fn,
