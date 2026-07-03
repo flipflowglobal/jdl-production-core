@@ -28,9 +28,59 @@ best at; nothing is duplicated across them.
 
 | Path | Language | Role |
 |------|----------|------|
-| `rust/hotpath/` | Rust | `jdl-hotpath` — fast arbitrage-cycle detection (lib + CLI) |
+| `rust/hotpath/` | Rust | `jdl-hotpath` — arbitrage-cycle detection **+ EVM bytecode analysis** (lib + CLI + cdylib) |
+| `rust/hotpath/src/evm/` | Rust | recovered EVM engine: disassembler, CFG, signature recovery, security scan, decompiler, symbolic exec |
+| `python/jdl_native/` | Python/Cython | Python access to the Rust engine with layered userland fallback |
 | `node/` | Node.js | API/orchestration server; ethers.js reads; Rust bridge |
 | `contracts/` | Solidity | on-chain execution (unchanged; see `contracts/README.md`) |
+
+## EVM bytecode analysis (recovered engine)
+
+`rust/hotpath/src/evm/` is the `rust-core` EVM analysis engine that was removed from
+this repo, recovered from git history and refined into the crate. It lets a bot **vet a
+pool/token contract before interacting with it** — disassemble, recover the dispatcher's
+4-byte selectors, and scan for dangerous patterns (SELFDESTRUCT, DELEGATECALL, CREATE2).
+
+`analyze_bytecode(hex) → AnalysisReport` returns a coarse `verdict` (`safe` / `caution` /
+`danger`), a 0–100 `risk_score`, recovered `selectors`, and security `findings`:
+
+```bash
+echo '{"bytecode":"0x6000ff"}' | jdl-hotpath analyze
+# {"verdict":"danger","has_selfdestruct":true,...}   ← PUSH1 0; SELFDESTRUCT
+```
+
+## Python access — `jdl_native` (Cython + userland fallback)
+
+`python/jdl_native` exposes the Rust engine to Python with a **layered backend** so the
+*same* API works on a Linux server and on Termux/Android. Best available wins (override
+with `JDL_NATIVE_BACKEND`):
+
+| Backend | How | Needs | `analyze()` |
+|---------|-----|-------|-------------|
+| `cython` | compiled extension → cdylib | Cython + C compiler + Rust build | ✅ |
+| `ctypes` | loads the cdylib at runtime | just the `.so` (no compile) | ✅ |
+| `subprocess` | spawns the `jdl-hotpath` CLI | just the binary | ✅ |
+| `python` | pure-Python port of the arb scan | nothing (stdlib) | ✗ (raises `AnalysisUnavailable`) |
+
+```python
+import jdl_native
+jdl_native.scan({"edges":[...], "base":"USDC", "loan_usd":100000, "gas_usd":1})
+jdl_native.analyze("0x6000ff")          # needs a native backend or the CLI binary
+jdl_native.active_backend()             # 'cython' | 'ctypes' | 'subprocess' | 'python'
+```
+
+Build the fast Cython path (optional — the fallbacks work without it):
+
+```bash
+cd rust/hotpath && cargo build --release          # produces libjdl_hotpath.so + jdl-hotpath
+cd ../../python/jdl_native && python3 setup.py build_ext --inplace
+python3 test_jdl_native.py                          # 11 checks across all available backends
+```
+
+> **Userland compatibility:** on Termux/Android — where the Rust cdylib and CLI binary
+> generally won't build — `jdl_native` transparently uses the **pure-Python** backend for
+> the arb scan (identical results, verified), and `analyze()` raises a clear
+> `AnalysisUnavailable` instead of crashing. Nothing to compile, no root needed.
 
 ## Build & run
 

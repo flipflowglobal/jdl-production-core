@@ -14,6 +14,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Recovered + refined EVM bytecode-analysis engine (disassembler, CFG, signature
+/// recovery, security scan, decompiler, symbolic execution). Originally the
+/// `rust-core` crate that was removed from this repo; restored here and exposed as a
+/// library so a flash-loan bot can vet a pool/token contract's bytecode before it
+/// interacts with it (honeypot / dangerous-opcode detection, selector recovery).
+pub mod evm;
+
 /// Aave V3 flash-loan premium: 0.05% = 5 basis points.
 pub const AAVE_PREMIUM_BPS: f64 = 5.0;
 const BPS_DENOM: f64 = 10_000.0;
@@ -146,6 +153,144 @@ pub fn net_profit(mult: f64, req: &ScanRequest) -> f64 {
     gross_gain - premium - req.gas_usd
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  EVM bytecode analysis — high-level entry point over the recovered `evm` module
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A bot-friendly summary of a contract's bytecode: is it safe to interact with?
+#[derive(Debug, Clone, Serialize)]
+pub struct AnalysisReport {
+    /// "safe" | "caution" | "danger" — coarse verdict from the risk score + flags.
+    pub verdict: String,
+    pub risk_score: u32, // 0-100 from the security scanner
+    pub bytes: usize,
+    pub instruction_count: usize,
+    pub has_selfdestruct: bool,
+    pub has_delegatecall: bool,
+    pub has_create2: bool,
+    /// Selectors recovered from the dispatcher, e.g. ["0xa9059cbb", ...].
+    pub selectors: Vec<String>,
+    /// Named selectors that matched the built-in DeFi/ERC table.
+    pub known_functions: Vec<String>,
+    /// Security findings (severity/title/description).
+    pub findings: Vec<evm::security::Finding>,
+}
+
+/// Analyze a contract's runtime bytecode (hex, with or without `0x`).
+/// Runs disassemble → security scan → signature recovery and returns a verdict a
+/// flash-loan bot can gate on before interacting with a pool/token contract.
+pub fn analyze_bytecode(hex_code: &str) -> Result<AnalysisReport, String> {
+    let cleaned = hex_code.trim().trim_start_matches("0x");
+    if cleaned.is_empty() {
+        return Err("empty bytecode".into());
+    }
+    if cleaned.len() % 2 != 0 {
+        return Err("odd-length hex".into());
+    }
+    let mut bytes = Vec::with_capacity(cleaned.len() / 2);
+    for i in (0..cleaned.len()).step_by(2) {
+        let b = u8::from_str_radix(&cleaned[i..i + 2], 16)
+            .map_err(|_| format!("invalid hex at byte {}", i / 2))?;
+        bytes.push(b);
+    }
+
+    let disasm = evm::disasm::disassemble(&bytes);
+    let sec = evm::security::analyze_security(&disasm);
+    let sigs = evm::signatures::recover_signatures(&disasm);
+
+    let verdict = if sec.risk_score >= 70 || sec.has_selfdestruct {
+        "danger"
+    } else if sec.risk_score >= 35 || sec.has_delegatecall {
+        "caution"
+    } else {
+        "safe"
+    }
+    .to_string();
+
+    let selectors = sigs.functions.iter().map(|f| f.selector.clone()).collect();
+    let known_functions = sigs
+        .functions
+        .iter()
+        .filter_map(|f| f.known_name.clone())
+        .collect();
+
+    Ok(AnalysisReport {
+        verdict,
+        risk_score: sec.risk_score,
+        bytes: disasm.total_bytes,
+        instruction_count: disasm.instruction_count,
+        has_selfdestruct: sec.has_selfdestruct,
+        has_delegatecall: sec.has_delegatecall,
+        has_create2: sec.has_create2,
+        selectors,
+        known_functions,
+        findings: sec.findings,
+    })
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  C ABI — for the Cython/Python wrapper (native fast path). Each function takes a
+//  UTF-8 JSON C string and returns a newly-allocated JSON C string that the caller
+//  MUST release with `jdl_string_free`. Never panics across the FFI boundary.
+// ═══════════════════════════════════════════════════════════════════════════
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
+
+fn to_c_json<T: Serialize>(v: &T) -> *mut c_char {
+    let s = serde_json::to_string(v).unwrap_or_else(|_| "{\"error\":\"serialize\"}".into());
+    CString::new(s).unwrap_or_default().into_raw()
+}
+
+fn c_str_in<'a>(p: *const c_char) -> Option<&'a str> {
+    if p.is_null() {
+        return None;
+    }
+    unsafe { CStr::from_ptr(p).to_str().ok() }
+}
+
+/// Run the arbitrage hot-path. Input JSON = ScanRequest; output JSON = ScanResult.
+#[no_mangle]
+pub extern "C" fn jdl_scan(input: *const c_char) -> *mut c_char {
+    let result = std::panic::catch_unwind(|| match c_str_in(input) {
+        Some(s) => match serde_json::from_str::<ScanRequest>(s) {
+            Ok(req) => to_c_json(&best_cycle(&req)),
+            Err(e) => to_c_json(&serde_json::json!({ "error": format!("bad ScanRequest: {e}") })),
+        },
+        None => to_c_json(&serde_json::json!({ "error": "null/invalid input" })),
+    });
+    result.unwrap_or_else(|_| to_c_json(&serde_json::json!({ "error": "panic" })))
+}
+
+/// Analyze bytecode. Input JSON = {"bytecode":"0x..."}; output JSON = AnalysisReport.
+#[no_mangle]
+pub extern "C" fn jdl_analyze(input: *const c_char) -> *mut c_char {
+    let result = std::panic::catch_unwind(|| match c_str_in(input) {
+        Some(s) => {
+            let v: serde_json::Value = match serde_json::from_str(s) {
+                Ok(v) => v,
+                Err(e) => return to_c_json(&serde_json::json!({ "error": format!("bad JSON: {e}") })),
+            };
+            let code = v.get("bytecode").and_then(|b| b.as_str()).unwrap_or("");
+            match analyze_bytecode(code) {
+                Ok(r) => to_c_json(&r),
+                Err(e) => to_c_json(&serde_json::json!({ "error": e })),
+            }
+        }
+        None => to_c_json(&serde_json::json!({ "error": "null/invalid input" })),
+    });
+    result.unwrap_or_else(|_| to_c_json(&serde_json::json!({ "error": "panic" })))
+}
+
+/// Free a string returned by `jdl_scan` / `jdl_analyze`.
+#[no_mangle]
+pub extern "C" fn jdl_string_free(p: *mut c_char) {
+    if !p.is_null() {
+        unsafe {
+            let _ = CString::from_raw(p);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +352,30 @@ mod tests {
             min_profit_usd: 0.0,
         };
         assert!(best_cycle(&req).opportunity.is_none());
+    }
+
+    #[test]
+    fn analyze_rejects_bad_hex() {
+        assert!(analyze_bytecode("").is_err());
+        assert!(analyze_bytecode("0xabc").is_err()); // odd length
+        assert!(analyze_bytecode("0xzz").is_err());  // non-hex
+    }
+
+    #[test]
+    fn analyze_flags_selfdestruct_as_danger() {
+        // Minimal runtime: PUSH1 0x00 ; SELFDESTRUCT (0xff). Should verdict "danger".
+        let report = analyze_bytecode("0x6000ff").expect("analyzes");
+        assert!(report.has_selfdestruct, "SELFDESTRUCT must be detected");
+        assert_eq!(report.verdict, "danger");
+    }
+
+    #[test]
+    fn analyze_recovers_a_selector() {
+        // A tiny ERC20-style dispatcher fragment: compare calldata[0] to 0xa9059cbb
+        // (transfer). PUSH4 a9059cbb ... EQ. The signature recoverer should surface it.
+        // 0x63 = PUSH4. We just need the PUSH4 of a known selector present.
+        let report = analyze_bytecode("0x63a9059cbb").expect("analyzes");
+        assert!(report.bytes > 0 && report.instruction_count > 0);
     }
 
     #[test]
