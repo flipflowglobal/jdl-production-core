@@ -84,10 +84,22 @@ class BotSwarm:
     # ------------------------------------------------------------------
 
     async def _call(self, fn: Callable, *args: Any) -> Any:
-        """Await fn if it is a coroutine function, otherwise call it directly."""
+        """Await fn if it is a coroutine function; otherwise run it in a worker
+        thread via asyncio.to_thread.
+
+        This matters: scan_fn/exec_fn in this codebase are typically SYNCHRONOUS
+        functions wrapping blocking network I/O (web3.py's HTTPProvider, requests).
+        Calling a blocking sync function directly inside a coroutine (`return
+        fn(*args)`) has NO await point, so it runs to completion before the event
+        loop can schedule any other worker's task — N "concurrent" workers would
+        then execute strictly one-at-a-time, each paying full RPC round-trip
+        latency, giving ZERO real parallelism (just async bookkeeping overhead).
+        Routing through a thread lets the GIL release during actual socket I/O, so
+        multiple workers' blocking RPC calls genuinely overlap in wall-clock time.
+        """
         if inspect.iscoroutinefunction(fn):
             return await fn(*args)
-        return fn(*args)
+        return await asyncio.to_thread(fn, *args)
 
     async def _worker(self, worker_id: int, rounds: int, interval: float) -> None:
         """Scan loop for a single worker."""
