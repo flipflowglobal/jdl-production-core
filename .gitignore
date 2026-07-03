@@ -16,3 +16,17 @@ logs/
 *.egg-info/
 build/
 revenue_system/__pycache__/
+
+# Native extension build artifacts (Cython/C)
+*.so
+_jdl.c
+python/jdl_native/build/
+
+# Solidity / Hardhat / Foundry build output (scoped so the tracked
+# package-data ABI python/jdl_flash/artifacts/*.json is NOT ignored)
+contracts/out/
+contracts/cache/
+contracts/artifacts/
+
+# Secrets
+.env.production

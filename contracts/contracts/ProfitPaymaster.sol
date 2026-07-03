@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+// ============================================================
+// EXPERIMENTAL — NOT DEPLOYED. Not audited for production.
+// Do not deploy without a full audit.
+// ============================================================
+
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 // NOTE: OpenZeppelin's MessageHashUtils.sol requires solc ^0.8.24, but this
 // project pins solc 0.8.20 everywhere (foundry.toml, every other contract). The
@@ -107,27 +112,55 @@ contract ProfitPaymaster {
         }
     }
 
+    /// @notice Recompute the oracle-signed digest for a sponsorship request.
+    /// @dev Domain-separated: binds block.chainid (no cross-chain replay), this
+    ///      paymaster address, a `deadline` (no stale-sig replay) and a hash of
+    ///      userOp.callData (the signature can only sponsor the exact call it was
+    ///      issued for — not an arbitrary unrelated op with the same fc/pp/nonce).
+    function verifyProfitSignature(
+        address fc, uint256 pp, address sender, uint256 nonce,
+        uint256 deadline, bytes32 callDataHash
+    ) public view returns (bytes32 digest) {
+        bytes32 messageHash = keccak256(abi.encodePacked(
+            block.chainid, address(this), fc, pp, sender, nonce, deadline, callDataHash
+        ));
+        digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
+    }
+
     /// paymasterAndData layout:
     ///   [0:20]    paymaster address (this)
     ///   [20:40]   flash contract address
     ///   [40:72]   minProfitOverride (uint256)
     ///   [72:104]  projectedProfit   (uint256)
     ///   [104:136] nonce (uint256)          — paymaster-level replay guard
-    ///   [136:201] oracle signature (65 bytes)
+    ///   [136:168] deadline (uint256)       — unix ts; sig invalid after this
+    ///   [168:233] oracle signature (65 bytes)
+    ///
+    /// NOTE (within-bundle replay — known limitation, dormant contract): usedNonces
+    /// is written only in postOp, but EIP-4337 v0.6 forbids state writes in the
+    /// `view` validation phase. So a single signed op can pass validatePaymasterUserOp
+    /// multiple times within one bundle before any postOp runs. A robust fix requires
+    /// integrating the EntryPoint's per-sender nonce (which the EntryPoint increments
+    /// atomically) instead of a self-managed usedNonces map. That redesign is out of
+    /// scope here because this contract is NOT deployed. The chainId + deadline +
+    /// callData binding added below materially narrows the exposure (sigs are
+    /// short-lived, chain-scoped, and pinned to one exact call).
     function validatePaymasterUserOp(
         UserOperation calldata userOp,
         bytes32,
         uint256 maxCost
     ) external view onlyEntryPoint returns (bytes memory context, uint256 validationData) {
-        require(userOp.paymasterAndData.length >= 201, "bad pmd");
+        require(userOp.paymasterAndData.length >= 233, "bad pmd");
 
-        address fc    = address(bytes20(userOp.paymasterAndData[20:40]));
-        uint256 mpo   = uint256(bytes32(userOp.paymasterAndData[40:72]));
-        uint256 pp    = uint256(bytes32(userOp.paymasterAndData[72:104]));
-        uint256 nonce = uint256(bytes32(userOp.paymasterAndData[104:136]));
-        bytes memory signature = userOp.paymasterAndData[136:201];
+        address fc       = address(bytes20(userOp.paymasterAndData[20:40]));
+        uint256 mpo      = uint256(bytes32(userOp.paymasterAndData[40:72]));
+        uint256 pp       = uint256(bytes32(userOp.paymasterAndData[72:104]));
+        uint256 nonce    = uint256(bytes32(userOp.paymasterAndData[104:136]));
+        uint256 deadline = uint256(bytes32(userOp.paymasterAndData[136:168]));
+        bytes memory signature = userOp.paymasterAndData[168:233];
 
         require(approvedContracts[fc], "!approved");
+        require(block.timestamp <= deadline, "sig expired");
 
         uint256 minP = mpo > 0 ? mpo : minProfitUSDC6;
         require(pp >= minP, "profit too low");
@@ -143,8 +176,10 @@ contract ProfitPaymaster {
         bytes32 nonceKey = keccak256(abi.encodePacked(fc, pp, userOp.sender, nonce));
         require(!usedNonces[nonceKey], "nonce used");
 
-        bytes32 messageHash = keccak256(abi.encodePacked(fc, pp, userOp.sender, nonce));
-        bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
+        // Domain-separated digest: chainId + paymaster + deadline + callData hash.
+        bytes32 digest = verifyProfitSignature(
+            fc, pp, userOp.sender, nonce, deadline, keccak256(userOp.callData)
+        );
         require(ECDSA.recover(digest, signature) == trustedOracle, "invalid signature");
 
         context = abi.encode(userOp.sender, maxCost, pp, nonce, fc);
@@ -177,5 +212,5 @@ contract ProfitPaymaster {
     function setProfitToGasRatio(uint256 v)   external onlyOwner { profitToGasRatio=v; }
     function setReplenishThreshold(uint256 v) external onlyOwner { replenishThreshold=v; }
     function setReplenishAmount(uint256 v)    external onlyOwner { replenishAmount=v; }
-    function transferOwnership(address n)     external onlyOwner { owner=n; }
+    function transferOwnership(address n)     external onlyOwner { require(n != address(0), "zero owner"); owner=n; }
 }

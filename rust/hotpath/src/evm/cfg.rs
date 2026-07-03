@@ -67,10 +67,8 @@ pub fn build_cfg(disasm: &Disassembly) -> CFG {
         if ins.opcode == 0x5b {             // JUMPDEST
             leaders.insert(idx);
         }
-        if is_terminal(ins.opcode) || is_jump(ins.opcode) {
-            if idx + 1 < instrs.len() {
-                leaders.insert(idx + 1);    // next instr starts new block
-            }
+        if (is_terminal(ins.opcode) || is_jump(ins.opcode)) && idx + 1 < instrs.len() {
+            leaders.insert(idx + 1);    // next instr starts new block
         }
     }
 
@@ -127,7 +125,9 @@ pub fn build_cfg(disasm: &Disassembly) -> CFG {
     let mut succs: Vec<Vec<usize>> = vec![vec![]; block_count];
 
     for (bid, block) in blocks.iter().enumerate() {
-        let last_idx = *block.instructions.last().unwrap();
+        let Some(&last_idx) = block.instructions.last() else {
+            continue; // empty block: no terminator to resolve edges from
+        };
         let last_ins = &instrs[last_idx];
         let last_op  = last_ins.opcode;
 

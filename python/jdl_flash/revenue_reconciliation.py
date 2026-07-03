@@ -99,6 +99,7 @@ class RevenueReconciliationEngine:
         cumulative ledger)."""
         if not os.path.exists(self.db_path):
             return 0.0
+        con = None
         try:
             con = sqlite3.connect(self.db_path)
             cur = con.cursor()
@@ -107,11 +108,13 @@ class RevenueReconciliationEngine:
                 (token_symbol,),
             )
             row = cur.fetchone()
-            con.close()
             return float(row[0]) if row else 0.0
         except Exception as e:
             logger.error(f"revenue_log query failed: {e}")
             return 0.0
+        finally:
+            if con is not None:
+                con.close()
 
     def reconcile(self, contract_address: str, warn_usd: float = 1.0) -> ReconciliationResult:
         """Check every registered token's on-chain balance held by `contract_address`.

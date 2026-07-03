@@ -123,7 +123,7 @@ class BotSwarm:
         # Signal executor that this worker is done.
         await queue.put(None)
 
-    async def _executor(self, worker_id: int, rounds: int) -> None:
+    async def _executor(self, worker_id: int) -> None:
         """
         Drain the per-worker queue and call exec_fn.
 
@@ -178,7 +178,7 @@ class BotSwarm:
         tasks: List[asyncio.Task] = []
         for i in range(self._n):
             tasks.append(asyncio.ensure_future(self._worker(i, rounds, interval)))
-            tasks.append(asyncio.ensure_future(self._executor(i, rounds)))
+            tasks.append(asyncio.ensure_future(self._executor(i)))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         # Capture any unexpected task-level exceptions into worker stats.

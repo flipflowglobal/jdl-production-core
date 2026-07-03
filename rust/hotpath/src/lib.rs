@@ -96,6 +96,10 @@ pub fn best_cycle(req: &ScanRequest) -> ScanResult {
 
     // DFS from base, tracking the compounded multiplier; close the loop when we
     // return to base with >= 2 hops.
+    // Data-carrying recursion helper: each argument threads distinct state
+    // (graph, request, mutable path/best accumulators), so collapsing them into a
+    // struct would only obscure the traversal.
+    #[allow(clippy::too_many_arguments)]
     fn dfs<'a>(
         node: &'a str,
         base: &str,
@@ -112,7 +116,7 @@ pub fn best_cycle(req: &ScanRequest) -> ScanResult {
         if node == base && depth >= 2 {
             let net = net_profit(mult, req);
             if net > req.min_profit_usd
-                && best.as_ref().map_or(true, |b| net > b.net_profit_usd)
+                && best.as_ref().is_none_or(|b| net > b.net_profit_usd)
             {
                 *best = Some(Opportunity {
                     path: path.clone(),
@@ -184,7 +188,7 @@ pub fn analyze_bytecode(hex_code: &str) -> Result<AnalysisReport, String> {
     if cleaned.is_empty() {
         return Err("empty bytecode".into());
     }
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return Err("odd-length hex".into());
     }
     let mut bytes = Vec::with_capacity(cleaned.len() / 2);
@@ -249,8 +253,16 @@ fn c_str_in<'a>(p: *const c_char) -> Option<&'a str> {
 }
 
 /// Run the arbitrage hot-path. Input JSON = ScanRequest; output JSON = ScanResult.
+///
+/// # Safety
+/// `input` must be either null or a valid pointer to a NUL-terminated C string
+/// that stays alive and unmodified for the duration of the call. The returned
+/// pointer is a freshly heap-allocated NUL-terminated C string that the caller
+/// **must** release with [`jdl_string_free`] (never `free`) exactly once; leaking
+/// or double-freeing it is undefined behavior. Not thread-hostile: no shared
+/// mutable state, so distinct calls on distinct pointers may run concurrently.
 #[no_mangle]
-pub extern "C" fn jdl_scan(input: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn jdl_scan(input: *const c_char) -> *mut c_char {
     let result = std::panic::catch_unwind(|| match c_str_in(input) {
         Some(s) => match serde_json::from_str::<ScanRequest>(s) {
             Ok(req) => to_c_json(&best_cycle(&req)),
@@ -262,8 +274,16 @@ pub extern "C" fn jdl_scan(input: *const c_char) -> *mut c_char {
 }
 
 /// Analyze bytecode. Input JSON = {"bytecode":"0x..."}; output JSON = AnalysisReport.
+///
+/// # Safety
+/// `input` must be either null or a valid pointer to a NUL-terminated C string
+/// that stays alive and unmodified for the duration of the call. The returned
+/// pointer is a freshly heap-allocated NUL-terminated C string that the caller
+/// **must** release with [`jdl_string_free`] (never `free`) exactly once; leaking
+/// or double-freeing it is undefined behavior. Not thread-hostile: no shared
+/// mutable state, so distinct calls on distinct pointers may run concurrently.
 #[no_mangle]
-pub extern "C" fn jdl_analyze(input: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn jdl_analyze(input: *const c_char) -> *mut c_char {
     let result = std::panic::catch_unwind(|| match c_str_in(input) {
         Some(s) => {
             let v: serde_json::Value = match serde_json::from_str(s) {
@@ -282,8 +302,15 @@ pub extern "C" fn jdl_analyze(input: *const c_char) -> *mut c_char {
 }
 
 /// Free a string returned by `jdl_scan` / `jdl_analyze`.
+///
+/// # Safety
+/// `p` must be either null or a pointer previously returned by [`jdl_scan`] or
+/// [`jdl_analyze`] and not yet freed. Passing any other pointer, or the same
+/// pointer twice, is undefined behavior. After this call `p` is dangling and must
+/// not be used again. Not thread-hostile, but a given pointer must be freed by
+/// only one thread.
 #[no_mangle]
-pub extern "C" fn jdl_string_free(p: *mut c_char) {
+pub unsafe extern "C" fn jdl_string_free(p: *mut c_char) {
     if !p.is_null() {
         unsafe {
             let _ = CString::from_raw(p);

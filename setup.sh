@@ -5,7 +5,7 @@
 # Usage:
 #   bash setup.sh          — install only
 #   bash setup.sh run      — install + launch engine
-#   bash setup.sh test     — install + run 56-test suite
+#   bash setup.sh test     — install + run 79-test suite
 #   bash setup.sh termux   — Termux-specific guided install
 # ═══════════════════════════════════════════════════════════
 set -e
@@ -199,7 +199,7 @@ echo -e "  ${BOLD}Next steps:${RESET}"
 echo -e "  1. ${CYAN}nano $ENV_FILE${RESET}      — add PRIVATE_KEY + ALCHEMY_ARB_KEY"
 echo -e "  2. ${CYAN}bash setup.sh run${RESET}  — launch engine"
 echo -e "  3. Press ${BOLD}[9]${RESET} in the menu  — discover live protocol liquidity"
-echo -e "  4. Press ${BOLD}[8]${RESET} in the menu  — run tests (56/56 should pass)"
+echo -e "  4. Press ${BOLD}[8]${RESET} in the menu  — run tests (79/79 should pass)"
 echo
 
 if [ "$IS_TERMUX" = "1" ]; then
@@ -216,6 +216,6 @@ if [ "$1" = "run" ] || [ "$1" = "termux" ]; then
     echo -e "${CYAN}Launching Flash Loan Engine...${RESET}"
     python3 "$SCRIPT_DIR/python/trading_core.py"
 elif [ "$1" = "test" ]; then
-    echo -e "${CYAN}Running test suite (expect 56/56)...${RESET}"
-    python3 "$SCRIPT_DIR/python/test_flash_engine.py"
+    echo -e "${CYAN}Running test suite (expect 79/79)...${RESET}"
+    python3 "$SCRIPT_DIR/python/jdl_flash/test_flash_engine.py"
 fi

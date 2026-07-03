@@ -50,18 +50,34 @@ app.get('/contract', async (_req, res) => {
 
 // ── Scan: run the Rust hot-path over supplied quotes ──────────────────────
 // POST body = ScanRequest {edges, base, loan_usd, gas_usd, min_profit_usd?}
+const isNonNegFinite = (v) => Number.isFinite(v) && v >= 0;
+
 app.post('/scan', async (req, res) => {
   const body = req.body || {};
-  if (!Array.isArray(body.edges) || !body.base) {
-    return res.status(400).json({ error: 'body must include {edges:[], base, loan_usd, gas_usd}' });
+  if (!Array.isArray(body.edges) || body.edges.length === 0 || !body.base) {
+    return res.status(400).json({ error: 'body must include {edges:[non-empty], base, loan_usd, gas_usd}' });
+  }
+  // Numbers must be finite & non-negative; NaN would serialize to null and
+  // make the Rust deserialize fail with an opaque 500 instead of a clean 400.
+  const loan_usd = Number(body.loan_usd || 0);
+  const gas_usd = Number(body.gas_usd || 0);
+  const min_profit_usd = Number(body.min_profit_usd || 0);
+  if (!isNonNegFinite(loan_usd) || !isNonNegFinite(gas_usd) || !isNonNegFinite(min_profit_usd)) {
+    return res.status(400).json({ error: 'loan_usd, gas_usd and min_profit_usd must be finite, non-negative numbers' });
+  }
+  // Each edge needs finite rate/fee_bps or the hot-path can't score it.
+  for (const e of body.edges) {
+    if (!e || typeof e !== 'object' || !Number.isFinite(Number(e.rate)) || !Number.isFinite(Number(e.fee_bps))) {
+      return res.status(400).json({ error: 'each edge must have finite numeric rate and fee_bps' });
+    }
   }
   try {
     const result = await scan({
       edges: body.edges,
       base: body.base,
-      loan_usd: Number(body.loan_usd || 0),
-      gas_usd: Number(body.gas_usd || 0),
-      min_profit_usd: Number(body.min_profit_usd || 0),
+      loan_usd,
+      gas_usd,
+      min_profit_usd,
     });
     res.json(result);
   } catch (e) {

@@ -646,7 +646,7 @@ You will see the FLASH ASCII banner and this menu:
 | `[5]` Algorithms | Live GARCH/Kalman/OU/Kelly outputs |
 | `[6]` Status | Contract state, gas reserve, chain info |
 | `[7]` Config | Edit .env values without leaving the UI |
-| `[8]` Tests | Run the full 18-test suite inline |
+| `[8]` Tests | Run the full 79-test suite inline |
 
 ---
 
@@ -1004,7 +1004,7 @@ jdl-production-core/
 │   ├── flash_loan_engine.py     # Main engine + Termux UI
 │   ├── gas_kernel.py            # 7 gas strategies + UCB1
 │   ├── flash_supervisor.py      # Process supervisor
-│   ├── test_flash_engine.py     # 18-test suite
+│   ├── test_flash_engine.py     # 79-test suite
 │   └── requirements_flash.txt  # Python dependencies
 ├── contracts/
 │   ├── FlashZeroGas.sol         # Main flash loan executor
