@@ -937,6 +937,21 @@ mkdir -p ~/.flash_loan_engine
 - [ ] Monitor `supervisord.log` — repeated crashes may indicate an on-chain attack
 - [ ] After reaching $1,000, consider migrating to a multisig for withdrawal
 
+### Swarm mode — maximum parallel scanning
+
+`flashloan` → `[s]` runs **N concurrent scan workers**, each sweeping a *disjoint* slice
+of the route universe (token pairs × Uniswap V3 fee tiers), so N workers cover N× the
+market per tick with zero overlap. Each worker feeds its real quotes to the Rust hot-path
+(`jdl_native`) for fast cycle detection; a shared dedup set stops two workers chasing the
+same loop (which would just make one revert). Set `SWARM_WORKERS=auto` (CPU cores),
+`max` (4×cores≤32), or an explicit count.
+
+Honest limits: scanning parallelism is real and bounded by CPU + RPC rate limits (the
+engine fails over across its RPC pool). **Execution from a single wallet is serialized
+on-chain by nonce order** — the swarm uses nonce lanes so submission is parallel, but the
+sequencer mines them in order; for genuinely parallel *execution* you need multiple
+wallets. Swarm scan is dry (scan-only) unless `LIVE_EXECUTION=1`.
+
 ### Gasless mode (Gelato Relay) — zero-ETH wallet
 
 Set `GELATO_ENABLED=1` in `~/jdl/.env` to run without ever holding ETH. Every arbitrage
