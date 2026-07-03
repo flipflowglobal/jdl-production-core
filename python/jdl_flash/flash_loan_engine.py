@@ -235,14 +235,51 @@ REAL_LOAN_USD   = float(_env('REAL_LOAN_USD', default='10000') or '10000')
 
 # ── Real-data-only policy ───────────────────────────────────────────────────
 # Simulated / sample / fabricated data (the OpportunityScanner spread model, fake
-# tx hashes, mock profit) is FORBIDDEN on any mainnet. It is permitted ONLY on the
-# Sepolia testnet (chainId 11155111), where there is no real money at stake.
-SEPOLIA_CHAIN_ID = 11155111
+# tx hashes, mock profit) is FORBIDDEN on any mainnet. It is permitted ONLY on
+# Arbitrum Sepolia (chainId 421614 — this system is Arbitrum-only, so that's the
+# relevant testnet, not Ethereum Sepolia's 11155111), where there is no real
+# money at stake.
+SEPOLIA_CHAIN_ID = 421614
 IS_TESTNET  = CHAIN_ID == SEPOLIA_CHAIN_ID
-ALLOW_SIM   = IS_TESTNET                 # simulated paths reachable only on Sepolia
+ALLOW_SIM   = IS_TESTNET                 # simulated paths reachable only on Arbitrum Sepolia
 # On mainnet, force live on-chain quotes regardless of the USE_REAL_QUOTES flag.
 if not ALLOW_SIM:
     USE_REAL_QUOTES = True
+
+_SUPPORTED_CHAIN_IDS = (42161, SEPOLIA_CHAIN_ID)  # Arbitrum One, Arbitrum Sepolia
+
+
+def validate_env_config() -> list:
+    """Sanity-check the loaded .env values and return a list of warning strings
+    (empty if everything looks fine). Pure — reads already-loaded module
+    constants, makes no I/O calls, so it can run at startup for free.
+
+    Directly motivated by a real bug hit in this project: a duplicated
+    CHAIN_ID= line in .env silently resolved to a wrong value (dotenv keeps the
+    LAST match), which nothing caught until the engine failed to connect to any
+    RPC. This catches that class of mistake immediately instead of failing
+    confusingly downstream.
+    """
+    warnings = []
+    if CHAIN_ID not in _SUPPORTED_CHAIN_IDS:
+        warnings.append(
+            f"CHAIN_ID={CHAIN_ID} is not a supported network (expected 42161 "
+            f"Arbitrum One or {SEPOLIA_CHAIN_ID} Arbitrum Sepolia). Check ~/jdl/.env "
+            f"for a duplicate CHAIN_ID= line — dotenv silently keeps the LAST one."
+        )
+    if CONTRACT:
+        c = CONTRACT.strip()
+        if not (c.startswith('0x') and len(c) == 42 and all(ch in '0123456789abcdefABCDEF' for ch in c[2:])):
+            warnings.append(
+                f"FLASH_CONTRACT_ADDRESS={CONTRACT!r} doesn't look like a valid "
+                f"address (expected 0x + 40 hex chars, got {len(c)} chars)."
+            )
+    if LIVE_EXEC and not (PRIV_KEY or GELATO_ENABLED):
+        warnings.append(
+            "LIVE_EXECUTION=1 but neither PRIVATE_KEY nor GELATO_ENABLED is set — "
+            "there is no way to actually broadcast a transaction."
+        )
+    return warnings
 
 # Maximum-revenue mode: when set, the daemon sizes each loan with LoanOptimizer
 # (ternary search up to MAX_LOAN_USD) instead of the fixed REAL_LOAN_USD, to
@@ -1514,6 +1551,7 @@ def print_menu():
   {C.CYAN}[t]{C.RESET} Triangular Scan (real 3-hop)
   {C.CYAN}[v]{C.RESET} Advanced Analytics (pattern/market/prediction)
   {C.CYAN}[s]{C.RESET} Swarm Scan (maximum parallel, N workers)
+  {C.CYAN}[r]{C.RESET} Stuck-Funds Check (reconcile contract balances)
   {C.CYAN}[0]{C.RESET} Exit
 """)
 
@@ -2024,8 +2062,47 @@ async def menu_swarm():
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 
+def menu_reconcile():
+    """Check NexusFlashReceiver for stuck funds: a pass-through executor sweeps
+    100% of profit to the owner every call, so any non-dust token balance it
+    holds right now indicates a partially-failed sequence — rescueTokens()/
+    rescueETH() should be used."""
+    from jdl_flash.revenue_reconciliation import RevenueReconciliationEngine
+    clear()
+    print(f"\n{C.BOLD}{C.CYAN}  ─── STUCK-FUNDS CHECK ───{C.RESET}\n")
+    if not CONTRACT:
+        print(f"  {C.YELLOW}FLASH_CONTRACT_ADDRESS not set — nothing to check.{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    w3 = get_w3()
+    if not w3:
+        print(f"  {C.YELLOW}No live RPC connection.{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
+    engine = RevenueReconciliationEngine(
+        eth_call=lambda tx: _eth_call(w3, tx, 'latest'),
+        db_path=str(DB_PATH), tokens=ADV_TOKENS)
+    result = engine.reconcile(_w3_cs(CONTRACT))
+    color = {'OK': C.BGREEN, 'WARNING': C.BYELLOW, 'ERROR': C.RED}[result.status]
+    print(f"  Contract: {C.CYAN}{CONTRACT}{C.RESET}")
+    print(f"  Status:   {color}{result.status}{C.RESET}\n")
+    for sym, bal in result.balances.items():
+        flag = f"{C.RED}⚠ STUCK{C.RESET}" if sym in result.discrepancies else f"{C.BGREEN}clean{C.RESET}"
+        print(f"    {sym:6} on-chain={bal.on_chain_human:<14.6f} {flag}")
+    if result.discrepancies:
+        print(f"\n  {C.YELLOW}Run rescueTokens()/rescueETH() from the owner wallet to recover.{C.RESET}")
+    else:
+        print(f"\n  {C.DIM}No stuck funds detected — the contract holds ~0 of every tracked token.{C.RESET}")
+    input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
+
+
 async def main():
     init_db()
+    _cfg_warnings = validate_env_config()
+    if _cfg_warnings:
+        clear()
+        print(f"\n{C.BOLD}{C.YELLOW}  ─── CONFIG WARNINGS ───{C.RESET}\n")
+        for w in _cfg_warnings:
+            print(f"  {C.YELLOW}⚠ {w}{C.RESET}")
+        input(f"\n  {C.DIM}Press ENTER to continue anyway…{C.RESET}")
     while True:
         clear(); banner(); print_header(); print_menu()
         try:
@@ -2048,6 +2125,7 @@ async def main():
         elif choice == 't': menu_triangular()
         elif choice == 'v': menu_analytics()
         elif choice == 's': await menu_swarm()
+        elif choice == 'r': menu_reconcile()
         elif choice == '0': print(f"\n  {C.BYELLOW}Goodbye.{C.RESET}\n"); break
         else: print(f"  {C.RED}Invalid option.{C.RESET}"); await asyncio.sleep(0.4)
 

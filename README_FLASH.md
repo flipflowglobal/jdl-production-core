@@ -965,6 +965,14 @@ nonce.
 
 Swarm scan is dry (scan-only) unless `LIVE_EXECUTION=1`.
 
+### Stuck-funds check — `flashloan` → `[r]`
+
+`NexusFlashReceiver` sweeps 100% of profit to the owner on every call, so it should
+hold ~0 of every token between trades. `[r]` reads the contract's live on-chain
+balance of each tracked token and flags anything above a small dust threshold as
+stuck (a partially-failed sequence) — that's the signal to reach for
+`rescueTokens()`/`rescueETH()`. Read-only; makes no transactions.
+
 ### Gasless mode (Gelato Relay) — zero-ETH wallet
 
 Set `GELATO_ENABLED=1` in `~/jdl/.env` to run without ever holding ETH. Every arbitrage
