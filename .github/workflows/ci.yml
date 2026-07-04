@@ -1,8 +1,7 @@
 name: CI
 
-on:
-  push:
-  pull_request:
+# Explicit list form is the most parser-robust trigger spec.
+on: [push, pull_request]
 
 jobs:
   python:
@@ -33,9 +32,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      # Use the rustup toolchain pre-installed on ubuntu-latest runners rather than
+      # a third-party setup action — org Actions policies can restrict non-GitHub
+      # actions, which fails the whole run at startup. Only actions/* are used here.
+      - name: Ensure clippy component
+        run: rustup component add clippy
       - name: cargo test
         working-directory: rust/hotpath
         run: cargo test
