@@ -48,6 +48,13 @@ contract ProfitPaymasterTest is Test {
     address user = address(0xBEEF);
 
     function setUp() public {
+        // Foundry's default block.timestamp is 1. MockAggregatorV3.setStale()
+        // subtracts a "seconds ago" offset from block.timestamp, so with the
+        // default clock any offset over a second (e.g. the 2 hours used by
+        // test_RejectsStalePriceFeed) would underflow-guard to 0 instead of
+        // producing a genuinely stale updatedAt_ — silently defeating that
+        // test. Warp to a realistic timestamp so staleness math behaves.
+        vm.warp(1_700_000_000);
         oracle = vm.addr(oraclePk);
         ep = new MockEntryPoint();
         feed = new MockAggregatorV3();
@@ -56,10 +63,16 @@ contract ProfitPaymasterTest is Test {
     }
 
     // ─── helpers ──────────────────────────────────────────────────────────────
-    function _sign(uint256 pk, address fc, uint256 pp, address sender, uint256 nonce)
-        internal pure returns (bytes memory sig)
-    {
-        bytes32 digest = MessageHashLib(keccak256(abi.encodePacked(fc, pp, sender, nonce)));
+    // Mirrors ProfitPaymaster.verifyProfitSignature: chainId + this paymaster +
+    // fc + pp + sender + nonce + deadline + callDataHash, eth-signed-message hashed.
+    function _sign(
+        uint256 pk, address fc, uint256 pp, address sender, uint256 nonce,
+        uint256 deadline, bytes32 callDataHash
+    ) internal view returns (bytes memory sig) {
+        bytes32 messageHash = keccak256(abi.encodePacked(
+            block.chainid, address(pm), fc, pp, sender, nonce, deadline, callDataHash
+        ));
+        bytes32 digest = MessageHashLib(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
         sig = abi.encodePacked(r, s, v);
     }
@@ -69,11 +82,17 @@ contract ProfitPaymasterTest is Test {
         return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
     }
 
-    function _pmd(address fc, uint256 mpo, uint256 pp, uint256 nonce, bytes memory sig)
+    function _pmd(address fc, uint256 mpo, uint256 pp, uint256 nonce, uint256 deadline, bytes memory sig)
         internal view returns (bytes memory)
     {
-        return abi.encodePacked(address(pm), fc, mpo, pp, nonce, sig);
+        return abi.encodePacked(address(pm), fc, mpo, pp, nonce, deadline, sig);
     }
+
+    // Default deadline (an hour out) and callDataHash (matching the empty
+    // callData every _userOp() in this file uses) for tests that don't care
+    // about exercising those two fields specifically.
+    function _defaultDeadline() internal view returns (uint256) { return block.timestamp + 1 hours; }
+    function _emptyCallDataHash() internal pure returns (bytes32) { return keccak256(bytes("")); }
 
     function _userOp(address sender, bytes memory paymasterAndData) internal pure returns (UserOperation memory) {
         return UserOperation({
@@ -88,8 +107,8 @@ contract ProfitPaymasterTest is Test {
 
     function test_ValidSignatureAndSufficientProfitPasses() public {
         uint256 pp = 20_000_000; // $20 projected profit (way above min + ratio)
-        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1);
-        bytes memory pmd = _pmd(flashContract, 0, pp, 1, sig);
+        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1, _defaultDeadline(), _emptyCallDataHash());
+        bytes memory pmd = _pmd(flashContract, 0, pp, 1, _defaultDeadline(), sig);
         vm.prank(address(ep));
         (bytes memory context, uint256 validationData) =
             pm.validatePaymasterUserOp(_userOp(user, pmd), bytes32(0), 100_000);
@@ -100,8 +119,8 @@ contract ProfitPaymasterTest is Test {
     function test_RejectsWrongSigner() public {
         uint256 wrongPk = 0xBAD;
         uint256 pp = 20_000_000;
-        bytes memory sig = _sign(wrongPk, flashContract, pp, user, 1);
-        bytes memory pmd = _pmd(flashContract, 0, pp, 1, sig);
+        bytes memory sig = _sign(wrongPk, flashContract, pp, user, 1, _defaultDeadline(), _emptyCallDataHash());
+        bytes memory pmd = _pmd(flashContract, 0, pp, 1, _defaultDeadline(), sig);
         vm.prank(address(ep));
         vm.expectRevert(bytes("invalid signature"));
         pm.validatePaymasterUserOp(_userOp(user, pmd), bytes32(0), 100_000);
@@ -110,8 +129,8 @@ contract ProfitPaymasterTest is Test {
     function test_RejectsUnapprovedContract() public {
         address notApproved = address(0xDEAD);
         uint256 pp = 20_000_000;
-        bytes memory sig = _sign(oraclePk, notApproved, pp, user, 1);
-        bytes memory pmd = _pmd(notApproved, 0, pp, 1, sig);
+        bytes memory sig = _sign(oraclePk, notApproved, pp, user, 1, _defaultDeadline(), _emptyCallDataHash());
+        bytes memory pmd = _pmd(notApproved, 0, pp, 1, _defaultDeadline(), sig);
         vm.prank(address(ep));
         vm.expectRevert(bytes("!approved"));
         pm.validatePaymasterUserOp(_userOp(user, pmd), bytes32(0), 100_000);
@@ -119,8 +138,8 @@ contract ProfitPaymasterTest is Test {
 
     function test_RejectsBelowMinProfit() public {
         uint256 pp = 1_000_000; // $1, below the $5 default minimum
-        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1);
-        bytes memory pmd = _pmd(flashContract, 0, pp, 1, sig);
+        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1, _defaultDeadline(), _emptyCallDataHash());
+        bytes memory pmd = _pmd(flashContract, 0, pp, 1, _defaultDeadline(), sig);
         vm.prank(address(ep));
         vm.expectRevert(bytes("profit too low"));
         pm.validatePaymasterUserOp(_userOp(user, pmd), bytes32(0), 100_000);
@@ -131,18 +150,28 @@ contract ProfitPaymasterTest is Test {
         // 3x ratio requirement it can't clear.
         uint256 pp = 6_000_000; // $6
         uint256 maxCost = 1 ether; // absurdly large gas cost vs $6 profit
-        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1);
-        bytes memory pmd = _pmd(flashContract, 0, pp, 1, sig);
+        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1, _defaultDeadline(), _emptyCallDataHash());
+        bytes memory pmd = _pmd(flashContract, 0, pp, 1, _defaultDeadline(), sig);
         vm.prank(address(ep));
         vm.expectRevert(bytes("profit:gas ratio low"));
         pm.validatePaymasterUserOp(_userOp(user, pmd), bytes32(0), maxCost);
     }
 
+    function test_RejectsExpiredDeadline() public {
+        uint256 pp = 20_000_000;
+        uint256 deadline = block.timestamp == 0 ? 0 : block.timestamp - 1; // already past
+        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1, deadline, _emptyCallDataHash());
+        bytes memory pmd = _pmd(flashContract, 0, pp, 1, deadline, sig);
+        vm.prank(address(ep));
+        vm.expectRevert(bytes("sig expired"));
+        pm.validatePaymasterUserOp(_userOp(user, pmd), bytes32(0), 100_000);
+    }
+
     function test_RejectsStalePriceFeed() public {
         feed.setStale(2 hours); // maxPriceFeedAge default is 1 hour
         uint256 pp = 20_000_000;
-        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1);
-        bytes memory pmd = _pmd(flashContract, 0, pp, 1, sig);
+        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1, _defaultDeadline(), _emptyCallDataHash());
+        bytes memory pmd = _pmd(flashContract, 0, pp, 1, _defaultDeadline(), sig);
         vm.prank(address(ep));
         vm.expectRevert(bytes("stale price"));
         pm.validatePaymasterUserOp(_userOp(user, pmd), bytes32(0), 100_000);
@@ -151,8 +180,8 @@ contract ProfitPaymasterTest is Test {
     function test_RejectsNonPositivePrice() public {
         feed.setPrice(0);
         uint256 pp = 20_000_000;
-        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1);
-        bytes memory pmd = _pmd(flashContract, 0, pp, 1, sig);
+        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1, _defaultDeadline(), _emptyCallDataHash());
+        bytes memory pmd = _pmd(flashContract, 0, pp, 1, _defaultDeadline(), sig);
         vm.prank(address(ep));
         vm.expectRevert(bytes("invalid price"));
         pm.validatePaymasterUserOp(_userOp(user, pmd), bytes32(0), 100_000);
@@ -166,8 +195,9 @@ contract ProfitPaymasterTest is Test {
     // second time, once postOp has run.
     function test_ReplayIsRejectedAfterPostOp() public {
         uint256 pp = 20_000_000;
-        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1);
-        bytes memory pmd = _pmd(flashContract, 0, pp, 1, sig);
+        uint256 deadline = _defaultDeadline();
+        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1, deadline, _emptyCallDataHash());
+        bytes memory pmd = _pmd(flashContract, 0, pp, 1, deadline, sig);
 
         vm.prank(address(ep));
         (bytes memory context, ) = pm.validatePaymasterUserOp(_userOp(user, pmd), bytes32(0), 100_000);
@@ -189,9 +219,10 @@ contract ProfitPaymasterTest is Test {
     // what's actually signed, not just checked as a side channel.
     function test_DifferentNonceRequiresDifferentSignature() public {
         uint256 pp = 20_000_000;
-        bytes memory sigForNonce1 = _sign(oraclePk, flashContract, pp, user, 1);
+        uint256 deadline = _defaultDeadline();
+        bytes memory sigForNonce1 = _sign(oraclePk, flashContract, pp, user, 1, deadline, _emptyCallDataHash());
         // Attempt to reuse nonce=1's signature while claiming nonce=2 in the payload.
-        bytes memory pmd = _pmd(flashContract, 0, pp, 2, sigForNonce1);
+        bytes memory pmd = _pmd(flashContract, 0, pp, 2, deadline, sigForNonce1);
         vm.prank(address(ep));
         vm.expectRevert(bytes("invalid signature"));
         pm.validatePaymasterUserOp(_userOp(user, pmd), bytes32(0), 100_000);
@@ -219,8 +250,8 @@ contract ProfitPaymasterTest is Test {
 
     function test_OnlyEntryPointCanValidate() public {
         uint256 pp = 20_000_000;
-        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1);
-        bytes memory pmd = _pmd(flashContract, 0, pp, 1, sig);
+        bytes memory sig = _sign(oraclePk, flashContract, pp, user, 1, _defaultDeadline(), _emptyCallDataHash());
+        bytes memory pmd = _pmd(flashContract, 0, pp, 1, _defaultDeadline(), sig);
         vm.expectRevert(bytes("!ep"));
         pm.validatePaymasterUserOp(_userOp(user, pmd), bytes32(0), 100_000);
     }
