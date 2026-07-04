@@ -161,6 +161,21 @@ pub fn net_profit(mult: f64, req: &ScanRequest) -> f64 {
 //  EVM bytecode analysis — high-level entry point over the recovered `evm` module
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// One recovered function, distilled from the decompiler's `DecompiledFn` down to
+/// the signal a bot cares about: which selector, its name (or "unknown"), whether
+/// it mutates state, and its Solidity parameter types.
+#[derive(Debug, Clone, Serialize)]
+pub struct FunctionSummary {
+    /// Dispatcher selector, e.g. "0xa9059cbb"; empty for the fallback function.
+    pub selector: String,
+    /// Recovered name (e.g. "transfer", "fallback") or "unknown" if unresolved.
+    pub name: String,
+    /// True if the function performs no SSTORE/CALL/DELEGATECALL (read-only).
+    pub is_view: bool,
+    /// Solidity parameter types recovered from the ABI-decode pattern.
+    pub params: Vec<String>,
+}
+
 /// A bot-friendly summary of a contract's bytecode: is it safe to interact with?
 #[derive(Debug, Clone, Serialize)]
 pub struct AnalysisReport {
@@ -178,6 +193,14 @@ pub struct AnalysisReport {
     pub known_functions: Vec<String>,
     /// Security findings (severity/title/description).
     pub findings: Vec<evm::security::Finding>,
+    /// Basic-block count of the recovered control-flow graph (0 if degenerate).
+    pub cfg_blocks: usize,
+    /// Edge count of the recovered control-flow graph (0 if degenerate).
+    pub cfg_edges: usize,
+    /// Functions reconstructed by the decompiler (selector/name/view/params).
+    pub functions: Vec<FunctionSummary>,
+    /// Number of distinct storage slots the decompiler recovered.
+    pub storage_vars: usize,
 }
 
 /// Analyze a contract's runtime bytecode (hex, with or without `0x`).
@@ -201,6 +224,39 @@ pub fn analyze_bytecode(hex_code: &str) -> Result<AnalysisReport, String> {
     let disasm = evm::disasm::disassemble(&bytes);
     let sec = evm::security::analyze_security(&disasm);
     let sigs = evm::signatures::recover_signatures(&disasm);
+
+    // Recovered CFG + decompiler pipeline. Degenerate/tiny bytecode can leave the
+    // CFG empty (or make the symbolic executor index a missing entry block), so run
+    // it under catch_unwind and fall back to zeroed CFG fields rather than aborting
+    // the whole analysis — the security verdict is still valuable on its own.
+    let (cfg_blocks, cfg_edges, functions, storage_vars) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let cfg = evm::cfg::build_cfg(&disasm);
+            if cfg.blocks.is_empty() {
+                return (0usize, 0usize, Vec::<FunctionSummary>::new(), 0usize);
+            }
+            let blocks = cfg.block_count();
+            let edges = cfg.edge_count();
+            let dec = evm::decompiler::decompile(&disasm, &cfg, &sigs);
+            let functions: Vec<FunctionSummary> = dec
+                .functions
+                .iter()
+                .map(|f| FunctionSummary {
+                    selector: f.selector.clone().unwrap_or_default(),
+                    // fn_XXXX is the decompiler's placeholder for an unresolved
+                    // selector; surface it as "unknown" for the bot.
+                    name: if f.name.starts_with("fn_") {
+                        "unknown".to_string()
+                    } else {
+                        f.name.clone()
+                    },
+                    is_view: f.is_view,
+                    params: f.params.iter().map(|p| p.ty.clone()).collect(),
+                })
+                .collect();
+            (blocks, edges, functions, dec.storage_slots.len())
+        }))
+        .unwrap_or((0, 0, Vec::new(), 0));
 
     let verdict = if sec.risk_score >= 70 || sec.has_selfdestruct {
         "danger"
@@ -229,6 +285,10 @@ pub fn analyze_bytecode(hex_code: &str) -> Result<AnalysisReport, String> {
         selectors,
         known_functions,
         findings: sec.findings,
+        cfg_blocks,
+        cfg_edges,
+        functions,
+        storage_vars,
     })
 }
 
@@ -403,6 +463,40 @@ mod tests {
         // 0x63 = PUSH4. We just need the PUSH4 of a known selector present.
         let report = analyze_bytecode("0x63a9059cbb").expect("analyzes");
         assert!(report.bytes > 0 && report.instruction_count > 0);
+    }
+
+    #[test]
+    fn analyze_recovers_cfg_and_functions() {
+        // A minimal ERC20-style dispatcher: extract selector, compare to
+        // transfer(address,uint256) = 0xa9059cbb, JUMPI to a JUMPDEST.
+        //   PUSH1 0x00 CALLDATALOAD PUSH1 0xe0 SHR   (selector = msg.sig)
+        //   DUP1 PUSH4 a9059cbb EQ PUSH1 0x11 JUMPI  (dispatch → JUMPDEST @ 0x11)
+        //   STOP ; JUMPDEST STOP
+        let code = "0x600035".to_owned()       // PUSH1 00 CALLDATALOAD
+            + "60e01c"                          // PUSH1 e0 SHR
+            + "80"                              // DUP1
+            + "63a9059cbb"                      // PUSH4 selector
+            + "14"                              // EQ
+            + "601157"                          // PUSH1 0x11 JUMPI
+            + "00"                              // STOP  (byte offset 0x10)
+            + "5b00";                           // JUMPDEST STOP (byte offset 0x11)
+        let report = analyze_bytecode(&code).expect("analyzes");
+        assert!(report.cfg_blocks > 0, "CFG should have basic blocks");
+        assert!(
+            report.functions.iter().any(|f| f.selector == "0xa9059cbb"),
+            "transfer selector should be recovered as a function: {:?}",
+            report.functions
+        );
+    }
+
+    #[test]
+    fn analyze_trivial_bytecode_does_not_panic() {
+        // A lone STOP: valid but degenerate. Must not panic; CFG fields sane.
+        let report = analyze_bytecode("0x00").expect("analyzes trivial bytecode");
+        assert_eq!(report.verdict, "safe");
+        // No dispatcher, so no named DeFi functions and no storage recovered.
+        assert!(report.known_functions.is_empty());
+        assert_eq!(report.storage_vars, 0);
     }
 
     #[test]

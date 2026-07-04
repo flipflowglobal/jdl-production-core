@@ -454,6 +454,9 @@ pub struct SymExec<'a> {
     type_ctx: TypeCtx,
     visited: FxHashSet<usize>,
     results: FxHashMap<usize, BlockResult>,
+    // Reserved for SSA-style temp naming; the current decompiler renders values
+    // inline and only allocates call-result vars, so this stays unused for now.
+    #[allow(dead_code)]
     var_ctr: usize,
     call_ctr: usize,
 }
@@ -471,6 +474,9 @@ impl<'a> SymExec<'a> {
         }
     }
 
+    // Companion to `var_ctr`; kept for the SSA-naming path not yet exercised by
+    // the decompiler (which renders sub-expressions inline).
+    #[allow(dead_code)]
     fn fresh_var(&mut self) -> String {
         let n = self.var_ctr;
         self.var_ctr += 1;
