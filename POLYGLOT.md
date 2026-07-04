@@ -42,11 +42,15 @@ pool/token contract before interacting with it** — disassemble, recover the di
 4-byte selectors, and scan for dangerous patterns (SELFDESTRUCT, DELEGATECALL, CREATE2).
 
 `analyze_bytecode(hex) → AnalysisReport` returns a coarse `verdict` (`safe` / `caution` /
-`danger`), a 0–100 `risk_score`, recovered `selectors`, and security `findings`:
+`danger`), a 0–100 `risk_score`, recovered `selectors`, security `findings`, plus the full
+recovered structure: `cfg_blocks`/`cfg_edges` (control-flow graph), decompiled `functions`
+(`{selector, name, is_view, params}`), and `storage_vars` — the whole disasm → CFG →
+signature → decompile pipeline, so the report carries real honeypot signal (hidden
+owner-gated transfers, unexpected `selfdestruct`/`delegatecall`, odd storage layout):
 
 ```bash
 echo '{"bytecode":"0x6000ff"}' | jdl-hotpath analyze
-# {"verdict":"danger","has_selfdestruct":true,...}   ← PUSH1 0; SELFDESTRUCT
+# {"verdict":"danger","has_selfdestruct":true,"cfg_blocks":1,"functions":[],...}
 ```
 
 ## Python access — `jdl_native` (Cython + userland fallback)
