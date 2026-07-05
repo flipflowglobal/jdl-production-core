@@ -666,6 +666,10 @@ python3 python/flash_supervisor.py
 - PID file at `~/.flash_loan_engine/flash_engine.pid`
 - Log file at `~/.flash_loan_engine/supervisor.log`
 
+Pass `swarm` (or set `SUPERVISOR_TARGET=swarm`) to supervise the always-on parallel
+scanner instead of the single-process engine above — see "Always-on swarm daemon"
+under [Swarm mode](#swarm-mode--maximum-parallel-scanning).
+
 ### Run as a system service (optional)
 
 Create `/etc/systemd/system/flash-engine.service`:
@@ -964,6 +968,37 @@ more scan workers than wallets are configured, so two threads never race one wal
 nonce.
 
 Swarm scan is dry (scan-only) unless `LIVE_EXECUTION=1`.
+
+### Always-on swarm daemon — constant, unattended scanning
+
+`[s]` in the menu is interactive (prompts for a round count, exits when done) — for
+constant scanning with no one at the terminal, `swarm_daemon.py` runs the same
+`BotSwarm`/`SwarmCoordinator` machinery in an unattended loop instead, batching
+`SWARM_BATCH_ROUNDS` rounds (default 30) at a time and logging stats per batch until
+stopped:
+
+```bash
+source ~/.flash_venv/bin/activate
+python3 python/flash_supervisor.py swarm      # supervised: auto-restarts on crash
+# or, unsupervised:
+python3 -m jdl_flash.swarm_daemon
+```
+
+`flash_supervisor.py` (see [Supervisor](#supervisor)) now takes an optional target —
+`swarm` for the always-on parallel scanner, or the default (no argument /
+`SUPERVISOR_TARGET=engine`) for the original single-process engine, unchanged. Tune
+`SWARM_BATCH_ROUNDS`/`SWARM_INTERVAL` alongside the existing `SWARM_WORKERS` /
+`SWARM_KEYS` / `SWARM_CONTRACTS` from above.
+
+**Surviving reboots/OOM kills on Android:** `bash setup.sh swarm-boot` installs a
+Termux:Boot hook (`scripts/termux-boot-swarm.sh` → `~/.termux/boot/`) that starts the
+supervised swarm daemon automatically after every reboot, holding a
+`termux-wake-lock` so Android doesn't suspend it to save battery (needs the
+Termux:Boot and, optionally, Termux:API apps — see the command's own output for
+exact steps). On UserLAnd or a plain Linux box without Termux:Boot, the same
+`scripts/start-swarm-daemon.sh` launcher works under `nohup … &` or a systemd user
+service, exactly like the [Supervisor](#supervisor) section's `flash-engine.service`
+example but pointed at `flash_supervisor.py swarm`.
 
 ### Stuck-funds check — `flashloan` → `[r]`
 
