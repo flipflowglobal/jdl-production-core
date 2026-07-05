@@ -14,6 +14,7 @@ requires-python = ">=3.9"
 # The advanced modules are stdlib-only; web3 is only needed for on-chain quotes/exec.
 dependencies = [
     "web3>=6.0.0,<7",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.scripts]
