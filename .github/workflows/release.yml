@@ -61,7 +61,7 @@ jobs:
           cp target/release/jdl-hotpath dist/
           cp target/release/libjdl_hotpath.so dist/
       - name: Upload rust-hotpath-linux-x64 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rust-hotpath-linux-x64
           path: rust/hotpath/dist/
@@ -89,7 +89,7 @@ jobs:
         run: |
           tar --exclude='node_modules' -czf node-server-src.tar.gz node/
       - name: Upload node-server-src artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: node-server-src
           path: node-server-src.tar.gz
@@ -120,7 +120,7 @@ jobs:
         working-directory: contracts
         run: tar -czf contract-artifacts.tar.gz artifacts/
       - name: Upload contract-artifacts artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: contract-artifacts
           path: contracts/contract-artifacts.tar.gz
