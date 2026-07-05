@@ -6,6 +6,34 @@ A self-contained **flash-loan arbitrage system for Arbitrum One**, built to run 
 > Python AI ensemble ("Machine B"). That subsystem was removed to make this a single,
 > focused Termux flash-loan product. It remains recoverable from git history if ever needed.
 
+![CI](https://github.com/flipflowglobal/jdl-production-core/actions/workflows/ci.yml/badge.svg?branch=main)
+![Security](https://github.com/flipflowglobal/jdl-production-core/actions/workflows/security.yml/badge.svg?branch=main)
+
+## CI/CD
+
+- **CI** (`ci.yml`, on every push/PR) — four jobs gate merges: **python** (flash engine,
+  swarm, wallet-lanes, native-binding test suites), **rust** (`cargo test` +
+  `cargo clippy -D warnings` for `rust/hotpath`), **node** (`npm test`), and **solidity**
+  (Hardhat compile with solc 0.8.20; `continue-on-error` so a transient toolchain fetch
+  doesn't fail the pipeline).
+- **Security** (`security.yml`, on push/PR + a weekly Monday cron) — advisory dependency
+  audits (`pip-audit`, `cargo-audit`, `npm audit`) and Slither static analysis, none of
+  which block merges. The exception is **secret-scan** (gitleaks), which gates on
+  push/PR by scanning only the commits just introduced — a leaked credential in a repo
+  controlling a live, funded contract is always worth blocking on. The weekly cron run
+  additionally sweeps full git history as a non-blocking reminder (this repo has one
+  known pre-existing leaked credential pending rotation, so a full-history scan can't
+  gate without going permanently red).
+- **Dependabot** opens weekly dependency-update PRs, one day per ecosystem (pip, cargo,
+  npm × node/contracts, GitHub Actions).
+- **Release** (`release.yml`, only on `v*` tag push) builds and packages artifacts
+  (Rust hot-path binary, Node source bundle, compiled contract ABI/bytecode) and attaches
+  them to a GitHub Release. It never deploys contracts and never touches the live bot —
+  deployment stays a deliberate, manual step performed by a human outside CI, unchanged.
+
+Only `actions/*`-authored GitHub Actions are used across these workflows (org policy);
+any other tooling is installed directly via pip/cargo/npm/curl.
+
 ## Architecture
 
 ```

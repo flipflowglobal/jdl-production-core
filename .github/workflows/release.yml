@@ -1,0 +1,208 @@
+# -----------------------------------------------------------------------
+# This workflow packages build artifacts only. It never deploys
+# NexusFlashReceiver or any other contract, and never touches the live
+# trading bot. Deployment remains a deliberate, manual, human-run action.
+#
+# Trigger: pushing a tag matching "v*" (e.g. v1.2.3). Nothing here runs on
+# push to a branch or on pull_request, and no job invokes `hardhat run
+# scripts/deploy-*`, forge script, or any other deploy/broadcast command.
+# Every job only builds, compiles, or packages artifacts and uploads them
+# to a GitHub Release for humans to later deploy by hand if they choose.
+#
+# Third-party-action policy (same as ci.yml / security.yml): only actions
+# authored by "actions/" are used (checkout, setup-python, setup-node,
+# cache, upload-artifact, download-artifact, github-script). No
+# marketplace create-release / upload-release-asset actions — the release
+# itself is created via actions/github-script@v7 calling the GitHub REST
+# API (octokit) directly.
+# -----------------------------------------------------------------------
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# A tag push is a one-shot event; do not cancel an in-flight release build
+# if another tag is pushed moments later — let each release finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-rust:
+    name: Build Rust hotpath (release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # rustup is preinstalled on ubuntu-latest runners; no third-party
+      # toolchain action needed (same reasoning as ci.yml's rust job).
+      - name: Cache cargo dependencies and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            rust/hotpath/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('rust/hotpath/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+      - name: cargo build --release
+        working-directory: rust/hotpath
+        run: cargo build --release
+      - name: Stage release binaries
+        working-directory: rust/hotpath
+        run: |
+          mkdir -p dist
+          cp target/release/jdl-hotpath dist/
+          cp target/release/libjdl_hotpath.so dist/
+      - name: Upload rust-hotpath-linux-x64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-hotpath-linux-x64
+          path: rust/hotpath/dist/
+          if-no-files-found: error
+
+  build-node:
+    name: Build Node server bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: 'npm'
+          cache-dependency-path: 'node/package-lock.json'
+      - name: Install deps
+        working-directory: node
+        run: npm ci || npm install
+      # Source-only release bundle: excludes node_modules (each deployer
+      # runs their own `npm ci --production` from package-lock.json), and
+      # this step only ever writes a tarball to a temp path — it does not
+      # start, restart, or otherwise touch the running bot.
+      - name: Package node/ source (excluding node_modules)
+        run: |
+          tar --exclude='node_modules' -czf node-server-src.tar.gz node/
+      - name: Upload node-server-src artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-server-src
+          path: node-server-src.tar.gz
+          if-no-files-found: error
+
+  build-contracts-artifacts:
+    name: Compile contracts (artifacts only, no deploy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: 'npm'
+          cache-dependency-path: 'contracts/package-lock.json'
+      - name: Install deps
+        working-directory: contracts
+        run: npm ci || npm install
+      # `npm run compile` runs `npx hardhat compile` only. It does NOT run
+      # any deploy:* script and never broadcasts a transaction to any
+      # network — it just produces local ABI/bytecode JSON under
+      # contracts/artifacts/.
+      - name: Compile contracts (Hardhat + solc 0.8.20)
+        working-directory: contracts
+        run: npm run compile
+      - name: Package compiled ABI/bytecode reference artifacts
+        working-directory: contracts
+        run: tar -czf contract-artifacts.tar.gz artifacts/
+      - name: Upload contract-artifacts artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-artifacts
+          path: contracts/contract-artifacts.tar.gz
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-rust, build-node, build-contracts-artifacts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download rust-hotpath-linux-x64
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-hotpath-linux-x64
+          path: download/rust-hotpath-linux-x64
+      - name: Download node-server-src
+        uses: actions/download-artifact@v4
+        with:
+          name: node-server-src
+          path: download/node-server-src
+      - name: Download contract-artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: contract-artifacts
+          path: download/contract-artifacts
+
+      # Zip each downloaded artifact directory into a single archive per
+      # artifact so the release has one clean asset per component.
+      - name: Zip release assets
+        run: |
+          mkdir -p release-assets
+          (cd download/rust-hotpath-linux-x64 && zip -r "${GITHUB_WORKSPACE}/release-assets/rust-hotpath-linux-x64.zip" .)
+          (cd download/node-server-src && zip -r "${GITHUB_WORKSPACE}/release-assets/node-server-src.zip" .)
+          (cd download/contract-artifacts && zip -r "${GITHUB_WORKSPACE}/release-assets/contract-artifacts.zip" .)
+          ls -la release-assets
+
+      # Creates the GitHub Release for the pushed tag and uploads the
+      # zipped assets via the octokit REST API. This only calls the
+      # Releases API (createRelease / uploadReleaseAsset) — it has no
+      # access to, and makes no calls toward, any blockchain network or
+      # the live bot's runtime.
+      - name: Create GitHub Release and upload assets
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const tag = context.ref.replace('refs/tags/', '');
+
+            const release = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: tag,
+              body: [
+                `Automated build-artifact release for ${tag}.`,
+                '',
+                'This release contains built/packaged artifacts only:',
+                '- rust-hotpath-linux-x64.zip: release build of the Rust hot-path (jdl-hotpath binary + libjdl_hotpath.so)',
+                '- node-server-src.zip: Node.js orchestration server source (no node_modules)',
+                '- contract-artifacts.zip: compiled Solidity ABI/bytecode reference (Hardhat artifacts/), NOT a deployment',
+                '',
+                'Nothing in this release was deployed to any network. Deploying ' +
+                'NexusFlashReceiver or any other contract, and restarting the ' +
+                'live trading bot, remain deliberate, manual, human-run actions.',
+              ].join('\n'),
+              draft: false,
+              prerelease: tag.includes('-'),
+            });
+
+            const assetsDir = path.join(process.env.GITHUB_WORKSPACE, 'release-assets');
+            for (const fileName of fs.readdirSync(assetsDir)) {
+              const filePath = path.join(assetsDir, fileName);
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.data.id,
+                name: fileName,
+                data: fs.readFileSync(filePath),
+              });
+            }

@@ -1,0 +1,165 @@
+name: Security
+
+# Runs on every push/PR (fast feedback) plus a weekly off-peak schedule
+# (Monday 03:17 UTC) to catch newly disclosed CVEs/leaked-secret patterns
+# even when nobody is actively pushing code.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+
+jobs:
+  # -----------------------------------------------------------------------
+  # NOTE ON continue-on-error: every job below except "secret-scan" is
+  # advisory-only right now — these scans are not yet wired up as required
+  # status checks / branch-protection gates, so a finding must not block
+  # merges or break other CI. Once findings are triaged and the process is
+  # trusted, continue-on-error can be dropped job-by-job to make them
+  # gating. "secret-scan" is the one exception: a real leaked credential in
+  # a repo that controls a live, funded mainnet contract is always worth
+  # blocking on, so that job is intentionally allowed to fail the workflow.
+  # -----------------------------------------------------------------------
+
+  python-audit:
+    name: Python dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit python/requirements_flash.txt
+        # requirements_flash.txt only pins external PyPI packages (no local/
+        # editable path requirements), so pip-audit can resolve everything
+        # here without a "|| true" guard. The job-level continue-on-error
+        # above is what keeps a genuine finding from failing the pipeline;
+        # we don't want a second, step-level "|| true" masking a hard
+        # failure of pip-audit itself (e.g. a bad install) as a clean scan.
+        run: pip-audit -r python/requirements_flash.txt
+
+  rust-audit:
+    name: Rust dependency audit (cargo-audit)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      # rustup ships preinstalled on ubuntu-latest runners, so no
+      # third-party toolchain action is needed here (same reasoning as
+      # ci.yml's rust job).
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        working-directory: rust/hotpath
+        run: cargo audit
+
+  node-audit:
+    name: Node dependency audit (npm audit)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install node/ deps
+        working-directory: node
+        run: npm ci || npm install
+      - name: npm audit (node/)
+        working-directory: node
+        run: npm audit --audit-level=high
+      - name: Install contracts/ deps
+        working-directory: contracts
+        run: npm ci || npm install
+      - name: npm audit (contracts/)
+        working-directory: contracts
+        run: npm audit --audit-level=high
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history is needed so gitleaks can walk past commits, not
+          # just the working tree.
+          fetch-depth: 0
+      - name: Download gitleaks (direct release binary, not a marketplace action)
+        # Org policy blocks non-actions/* marketplace actions (this is what
+        # broke CI startup previously), so gitleaks/gitleaks-action is off
+        # the table. We fetch the official release tarball straight from
+        # GitHub Releases with curl instead — no third-party Action code
+        # runs in the workflow, only actions/checkout above.
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION="8.18.4"
+          curl -sSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+      - name: Determine commit range
+        # This repo's history already contains one known, documented leaked
+        # credential (predating this workflow; tracked separately for
+        # rotation) — a full-history scan would flag it on every run
+        # forever, turning a real gate into permanent noise. So push/PR
+        # runs only scan the commits actually being introduced, which is
+        # what should gate; the scheduled run below does the full-history
+        # sweep as a non-blocking reminder instead.
+        id: range
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "log_opts=${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            echo "log_opts=${{ github.event.before }}..${{ github.event.after }}" >> "$GITHUB_OUTPUT"
+          else
+            # New branch's first push (no "before"), or any other trigger: fall back to just the tip commit.
+            echo "log_opts=-1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run gitleaks (new commits only — gates the pipeline)
+        if: github.event_name != 'schedule'
+        run: ./gitleaks detect --source . -v --redact --log-opts="${{ steps.range.outputs.log_opts }}"
+      - name: Run gitleaks (full history — informational weekly sweep)
+        # Intentionally the only continue-on-error in this file that covers
+        # secret-scanning: this scan re-flags the known historical leak by
+        # design (it's a full-history sweep), so it must not block — it's a
+        # standing reminder until that credential is rotated and/or history
+        # is cleaned, not a gate on new commits.
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        run: ./gitleaks detect --source . -v --redact
+
+  solidity-slither:
+    name: Solidity static analysis (Slither)
+    runs-on: ubuntu-latest
+    # Advisory, matching the manual process already documented in
+    # contracts/README.md's "Security hardening notes" section — this job
+    # just automates that one-time-manual command, it doesn't change how
+    # findings get triaged.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install slither-analyzer + solc-select
+        run: pip install slither-analyzer solc-select
+      - name: Pin solc 0.8.20
+        run: |
+          solc-select install 0.8.20
+          solc-select use 0.8.20
+      - name: Install contracts/ deps
+        working-directory: contracts
+        run: npm ci || npm install
+      - name: slither
+        working-directory: contracts
+        # contracts/ has both foundry.toml and hardhat.config.js (Foundry is used
+        # locally for fork/fuzz/invariant tests; Hardhat is what actually compiles
+        # in CI). crytic-compile auto-detects Foundry from foundry.toml and tries to
+        # invoke `forge`, which isn't installed on this runner — force the Hardhat
+        # platform explicitly so it uses the already-installed npm toolchain instead.
+        run: |
+          slither . --compile-force-framework hardhat --filter-paths "FlashZeroGas.sol|ProfitPaymaster.sol|lib/|node_modules/" --exclude-informational
