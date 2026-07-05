@@ -3,7 +3,7 @@
 # drops ipfshttpclient→psutil (which can't build on Android). Verified 79/79 + live
 # deploy on web3 6.20.4. The engine also runs on the old 5.31.4 line via its shims,
 # but 5.31.4 needs a `pip install --no-deps --upgrade parsimonious>=0.10` override.
-web3>=6.0.0,<7
+web3>=6.0.0,<8
 requests>=2.34.2
 python-dotenv>=1.0.0
 aiohttp>=3.14.1
