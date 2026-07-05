@@ -13,7 +13,7 @@ requires-python = ">=3.9"
 # The engine's v5/v6 shims + hand-rolled ABI keep it working on either line.
 # The advanced modules are stdlib-only; web3 is only needed for on-chain quotes/exec.
 dependencies = [
-    "web3>=6.0.0,<7",
+    "web3>=6.0.0,<8",
     "python-dotenv>=1.0.0",
 ]
 
