@@ -3,15 +3,27 @@ name: CI
 # Explicit list form is the most parser-robust trigger spec.
 on: [push, pull_request]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   python:
     name: Python tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('python/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
       - name: Install package
         run: pip install -e python/
       - name: Flash engine suite
@@ -30,6 +42,7 @@ jobs:
   rust:
     name: Rust hotpath
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       # Use the rustup toolchain pre-installed on ubuntu-latest runners rather than
@@ -37,6 +50,15 @@ jobs:
       # actions, which fails the whole run at startup. Only actions/* are used here.
       - name: Ensure clippy component
         run: rustup component add clippy
+      - name: Cache cargo dependencies and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            rust/hotpath/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/hotpath/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       - name: cargo test
         working-directory: rust/hotpath
         run: cargo test
@@ -47,11 +69,14 @@ jobs:
   node:
     name: Node server
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: 'npm'
+          cache-dependency-path: 'node/package-lock.json'
       - name: Install deps
         working-directory: node
         run: npm ci || npm install
@@ -62,6 +87,7 @@ jobs:
   solidity:
     name: Solidity contracts
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # continue-on-error: Hardhat downloads the solc 0.8.20 binary and resolves
     # OpenZeppelin imports at compile time; if the network fetch or a peer-dep
     # resolution hiccups in CI we don't want it to fail the whole pipeline.
@@ -71,6 +97,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: 'npm'
+          cache-dependency-path: 'contracts/package-lock.json'
       - name: Install deps
         working-directory: contracts
         run: npm ci || npm install
