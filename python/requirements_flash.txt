@@ -4,7 +4,7 @@
 # deploy on web3 6.20.4. The engine also runs on the old 5.31.4 line via its shims,
 # but 5.31.4 needs a `pip install --no-deps --upgrade parsimonious>=0.10` override.
 web3>=6.0.0,<7
-requests>=2.31.0
+requests>=2.34.2
 python-dotenv>=1.0.0
 aiohttp>=3.9.0
 hexbytes>=0.3.0
