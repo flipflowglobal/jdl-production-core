@@ -156,5 +156,10 @@ jobs:
         run: npm ci || npm install
       - name: slither
         working-directory: contracts
+        # contracts/ has both foundry.toml and hardhat.config.js (Foundry is used
+        # locally for fork/fuzz/invariant tests; Hardhat is what actually compiles
+        # in CI). crytic-compile auto-detects Foundry from foundry.toml and tries to
+        # invoke `forge`, which isn't installed on this runner — force the Hardhat
+        # platform explicitly so it uses the already-installed npm toolchain instead.
         run: |
-          slither . --filter-paths "FlashZeroGas.sol|ProfitPaymaster.sol|lib/|node_modules/" --exclude-informational
+          slither . --compile-force-framework hardhat --filter-paths "FlashZeroGas.sol|ProfitPaymaster.sol|lib/|node_modules/" --exclude-informational
