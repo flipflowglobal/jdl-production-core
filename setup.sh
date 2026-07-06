@@ -163,9 +163,9 @@ pip install $PIP_FLAGS -r "$SCRIPT_DIR/python/requirements_flash.txt"
 # "web3 not installed". Override it (can't be a normal pin: eth-abi 2.2.0 caps
 # parsimonious<0.9.0). --no-deps avoids re-triggering the resolver.
 pip install $PIP_FLAGS --no-deps --upgrade 'parsimonious>=0.10'
-# Install the package so the `flashloan` command is available everywhere.
+# Install the package so `jdl` (and flashloan/flashpro) are available everywhere.
 pip install $PIP_FLAGS -e "$SCRIPT_DIR/python"
-ok "Dependencies installed (web3 5.31.4 + parsimonious fix); 'flashloan' command ready"
+ok "Dependencies installed (web3 5.31.4 + parsimonious fix); 'jdl' command ready"
 
 # ── 4. Data directory ────────────────────────────────────────
 step "Creating data directory at $DATA_DIR..."
@@ -199,9 +199,11 @@ echo -e "  ${DIM}●${RESET} Uniswap V3      multiple pools  0.05–0.30% fee"
 echo
 echo -e "  ${BOLD}Next steps:${RESET}"
 echo -e "  1. ${CYAN}nano $ENV_FILE${RESET}      — add PRIVATE_KEY + ALCHEMY_ARB_KEY"
-echo -e "  2. ${CYAN}bash setup.sh run${RESET}  — launch engine"
+echo -e "  2. ${CYAN}jdl run${RESET}             — launch the engine (or: bash setup.sh run)"
 echo -e "  3. Press ${BOLD}[9]${RESET} in the menu  — discover live protocol liquidity"
-echo -e "  4. Press ${BOLD}[8]${RESET} in the menu  — run tests (79/79 should pass)"
+echo -e "  4. ${CYAN}jdl test${RESET}            — run the full test suite (or: bash setup.sh test)"
+echo -e "  ${DIM}One CLI for everything — 'jdl --help' lists every command (run/pro/swarm/"
+echo -e "  supervisor/deploy/status/test).${RESET}"
 echo
 
 if [ "$IS_TERMUX" = "1" ]; then

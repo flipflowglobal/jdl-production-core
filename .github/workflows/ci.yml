@@ -26,22 +26,8 @@ jobs:
             ${{ runner.os }}-pip-
       - name: Install package
         run: pip install -e python/
-      - name: Flash engine suite
-        run: python3 python/jdl_flash/test_flash_engine.py
-      - name: Swarm runtime suite
-        run: python3 python/jdl_flash/test_swarm_runtime.py
-      - name: Bot swarm suite
-        run: python3 python/jdl_flash/test_bot_swarm.py
-      - name: Wallet lanes suite
-        run: python3 python/jdl_flash/test_wallet_lanes.py
-      - name: Swarm wiring suite
-        run: python3 python/jdl_flash/test_swarm_wiring.py
-      - name: Swarm daemon suite
-        run: python3 python/jdl_flash/test_swarm_daemon.py
-      - name: Supervisor target-resolution suite
-        run: python3 python/test_flash_supervisor.py
-      - name: Native binding suite
-        run: python3 python/jdl_native/test_jdl_native.py
+      - name: Full test suite (jdl test — same command a local install runs)
+        run: jdl test
 
   rust:
     name: Rust hotpath

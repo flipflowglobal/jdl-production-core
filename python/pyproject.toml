@@ -20,6 +20,7 @@ dependencies = [
 [project.scripts]
 flashloan = "jdl_flash.flash_loan_engine:_run"
 flashpro  = "jdl_flash.flash_pro:main"
+jdl       = "jdl_flash.cli:main"
 
 # The top-level scripts gas_kernel.py, trading_core.py and flash_supervisor.py are
 # standalone entrypoints shipped/launched via setup.sh — they are intentionally NOT
