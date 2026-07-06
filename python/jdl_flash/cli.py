@@ -90,6 +90,50 @@ def cmd_deploy(args: argparse.Namespace) -> int:
     return 0
 
 
+# Module-level so tests can monkeypatch it to a fake instead of touching real
+# git/pip/network — every cmd_update step goes through this one name.
+_run_subprocess = subprocess.run
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """git pull + reinstall, so every installed command (flashloan/flashpro/jdl,
+    and the jdl_native fast path if buildable) is brought up to date in one call
+    instead of four separate manual steps."""
+    repo_dir = _python_dir().parent
+
+    if _run_subprocess(["git", "-C", str(repo_dir), "rev-parse", "--is-inside-work-tree"],
+                        capture_output=True, text=True).returncode != 0:
+        print("  ✗ not a git checkout — clone the repo with git to use `jdl update`.")
+        return 1
+
+    status = _run_subprocess(["git", "-C", str(repo_dir), "status", "--porcelain"],
+                              capture_output=True, text=True)
+    if status.stdout.strip() and not args.force:
+        print("  ✗ local changes detected — refusing to `git pull` over them:\n")
+        print(status.stdout)
+        print("    Commit or stash your changes first, or re-run with --force to pull anyway.")
+        return 1
+
+    print("  ▶ git pull --ff-only …")
+    if _run_subprocess(["git", "-C", str(repo_dir), "pull", "--ff-only"]).returncode != 0:
+        print("  ✗ git pull failed — resolve manually (see above).")
+        return 1
+
+    print("  ▶ reinstalling jdl_flash (updates flashloan/flashpro/jdl on PATH) …")
+    if _run_subprocess([sys.executable, "-m", "pip", "install", "-e", str(_python_dir())]).returncode != 0:
+        print("  ✗ pip install -e failed — see above.")
+        return 1
+
+    native_setup = _python_dir() / "jdl_native" / "setup.py"
+    if native_setup.is_file():
+        print("  ▶ rebuilding jdl_native's Cython extension (best-effort — the ctypes/")
+        print("    subprocess/pure-python fallbacks keep working either way, see POLYGLOT.md) …")
+        _run_subprocess([sys.executable, "setup.py", "build_ext", "--inplace"], cwd=str(native_setup.parent))
+
+    print("  ✓ update complete — run `jdl test` to confirm everything still passes.")
+    return 0
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     # The Termux:Boot hook is an OS-level install step (symlinks, permission
     # checks) that setup.sh already does correctly per-platform — call straight
@@ -166,6 +210,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "install-swarm-boot", help="install the always-on scanner's boot hook (Termux:Boot, or nohup/systemd steps elsewhere)"
     ).set_defaults(func=cmd_install)
+
+    p_update = sub.add_parser("update", help="git pull + reinstall — brings every jdl/flashloan/flashpro command up to date")
+    p_update.add_argument("--force", action="store_true", help="pull even if the working tree has local changes")
+    p_update.set_defaults(func=cmd_update)
 
     p_test = sub.add_parser("test", help="run the full test suite (same suites CI runs)")
     p_test.add_argument("--filter", default=None, help="only run suites whose filename contains this substring")
