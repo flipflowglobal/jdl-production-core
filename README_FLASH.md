@@ -624,6 +624,7 @@ five different invocation styles:
 | `jdl status` | one-shot snapshot: daemon liveness, execution count, revenue |
 | `jdl test [--filter SUBSTR]` | run the full test suite — the exact same suites CI runs |
 | `jdl install-swarm-boot` | install the always-on scanner's boot hook (Termux:Boot, or prints nohup/systemd steps elsewhere) |
+| `jdl update [--force]` | `git pull` + reinstall, so every command above is brought up to date in one call — refuses to pull over uncommitted local changes unless `--force` |
 
 ### Start the interactive terminal UI
 
