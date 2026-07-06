@@ -59,9 +59,28 @@ class DaemonProc:
         self.stop(); time.sleep(RESTART_S); self.start()
     def restart_count(self): now=time.time(); return sum(1 for t in self._hist if now-t<3600)
 
+TARGETS = {
+    'engine': 'jdl_flash.flash_loan_engine',
+    'swarm':  'jdl_flash.swarm_daemon',
+}
+
+def resolve_target(spec=None):
+    """Resolve a supervision target to a `python -m`-able module path.
+
+    Accepts a TARGETS key ('engine', 'swarm'), a raw module path (anything
+    containing a dot, passed through as-is), or None (falls back to the
+    SUPERVISOR_TARGET env var, defaulting to 'engine' — unchanged behavior).
+    """
+    spec = spec if spec is not None else os.getenv('SUPERVISOR_TARGET', 'engine')
+    if spec in TARGETS:
+        return TARGETS[spec]
+    if '.' in spec:
+        return spec
+    return TARGETS['engine']
+
 class FlashSupervisor:
     def __init__(self, script=None):
-        if script is None: script='jdl_flash.flash_loan_engine'  # run via python -m
+        if script is None: script=resolve_target()  # run via python -m
         self.d=DaemonProc(script); self._notified=False
 
     def _status(self):
@@ -94,4 +113,8 @@ class FlashSupervisor:
 
 if __name__=='__main__':
     logging.basicConfig(level=logging.INFO,format='%(levelname)s %(message)s')
-    FlashSupervisor().run()
+    # Optional CLI override: `python3 flash_supervisor.py swarm` supervises the
+    # always-on parallel scanner instead of the legacy single-process engine
+    # (SUPERVISOR_TARGET env var works the same way; the CLI arg wins if both are set).
+    target = sys.argv[1] if len(sys.argv) > 1 else None
+    FlashSupervisor(script=resolve_target(target)).run()

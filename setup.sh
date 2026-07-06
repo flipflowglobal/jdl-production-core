@@ -7,6 +7,8 @@
 #   bash setup.sh run      — install + launch engine
 #   bash setup.sh test     — install + run 79-test suite
 #   bash setup.sh termux   — Termux-specific guided install
+#   bash setup.sh swarm-boot — install the always-on parallel-scanner boot hook
+#                              (Termux:Boot on Termux; prints manual steps elsewhere)
 # ═══════════════════════════════════════════════════════════
 set -e
 
@@ -208,6 +210,7 @@ if [ "$IS_TERMUX" = "1" ]; then
     echo -e "  ${DIM}• Run in background:  nohup bash setup.sh run &${RESET}"
     echo -e "  ${DIM}• View logs:          tail -f ~/.flash_loan_engine/flash.log${RESET}"
     echo -e "  ${DIM}• Stop engine:        pkill -f trading_core${RESET}"
+    echo -e "  ${DIM}• Constant parallel scanning across reboots: bash setup.sh swarm-boot${RESET}"
     echo
 fi
 
@@ -218,4 +221,30 @@ if [ "$1" = "run" ] || [ "$1" = "termux" ]; then
 elif [ "$1" = "test" ]; then
     echo -e "${CYAN}Running test suite (expect 79/79)...${RESET}"
     python3 "$SCRIPT_DIR/python/jdl_flash/test_flash_engine.py"
+elif [ "$1" = "swarm-boot" ]; then
+    # Wires up constant, unattended parallel-scanner opportunity scanning
+    # (swarm_daemon.py, supervised by flash_supervisor.py) so it survives
+    # reboots/crashes instead of only running while a terminal is open.
+    if [ "$IS_TERMUX" = "1" ]; then
+        step "Installing Termux:Boot hook for the always-on swarm scanner..."
+        mkdir -p "$HOME/.termux/boot"
+        ln -sf "$SCRIPT_DIR/scripts/termux-boot-swarm.sh" "$HOME/.termux/boot/start-flash-swarm.sh"
+        chmod +x "$SCRIPT_DIR/scripts/termux-boot-swarm.sh" "$SCRIPT_DIR/scripts/start-swarm-daemon.sh"
+        ok "Linked ~/.termux/boot/start-flash-swarm.sh -> $SCRIPT_DIR/scripts/termux-boot-swarm.sh"
+        info "Requires the Termux:Boot app (github.com/termux/termux-boot) installed with autostart"
+        info "permission granted, so Android actually runs this hook after a reboot. Optional but"
+        info "recommended: 'pkg install termux-api' + the Termux:API app, so termux-wake-lock keeps"
+        info "the scanner running instead of Android suspending it to save battery."
+        echo
+        step "Start it right now without waiting for a reboot:"
+        info "nohup bash $SCRIPT_DIR/scripts/start-swarm-daemon.sh &"
+    else
+        chmod +x "$SCRIPT_DIR/scripts/start-swarm-daemon.sh"
+        warn "Termux:Boot only exists on Termux — on $([ "$IS_USERLAND" = "1" ] && echo UserLAnd || echo this platform), start the always-on scanner yourself:"
+        info "  • One-off (foreground):        bash $SCRIPT_DIR/scripts/start-swarm-daemon.sh"
+        info "  • Background, survives logout: nohup bash $SCRIPT_DIR/scripts/start-swarm-daemon.sh &"
+        info "  • systemd user service (if your distro/UserLAnd session has systemd):"
+        info "      ExecStart=/bin/bash $SCRIPT_DIR/scripts/start-swarm-daemon.sh"
+        info "      then: systemctl --user enable --now flash-swarm.service"
+    fi
 fi
