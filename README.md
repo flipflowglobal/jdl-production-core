@@ -83,6 +83,7 @@ Full guides: [`README_FLASH.md`](README_FLASH.md) · [`TERMUX.md`](TERMUX.md) ·
 | Suite | Command | Result |
 |-------|---------|--------|
 | Python engine | `python3 -m jdl_flash.test_flash_engine` | 79/79 |
+| Python (everything — same as CI) | `jdl test` | all suites |
 | Contracts (Foundry) | `forge test` | 7/7 fork |
 | Contracts (Hardhat) | `npm run test:fork` | 7/7 fork |
 

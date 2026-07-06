@@ -600,18 +600,36 @@ flashloan
 
 ## Running the Engine
 
-### One-time install (makes the `flashloan` command available anywhere)
+### One-time install (makes every command below available anywhere)
 
 ```bash
 source ~/.flash_venv/bin/activate
-pip install -e python/          # installs the jdl_flash package + the flashloan command
+pip install -e python/          # installs the jdl_flash package + jdl/flashloan/flashpro commands
 ```
+
+### The `jdl` CLI — one command for everything
+
+`flashloan`/`flashpro` still work unchanged (they're the same functions, just under
+their original names) — `jdl` is a single entry point that wraps every command in
+this system, so `jdl --help` always lists everything instead of needing to remember
+five different invocation styles:
+
+| Command | What it does |
+|---|---|
+| `jdl run` | interactive terminal UI (same as `flashloan`) |
+| `jdl pro` | the advanced 8-module integrator (same as `flashpro`) |
+| `jdl swarm` | the always-on parallel scanner in the foreground, unattended (see [Always-on swarm daemon](#always-on-swarm-daemon--constant-unattended-scanning)) |
+| `jdl supervisor [engine\|swarm]` | run either target under the auto-restart supervisor (see [Supervisor](#supervisor)) |
+| `jdl deploy receiver\|gelato` | deploy `NexusFlashReceiver` (normal or gasless via Gelato) |
+| `jdl status` | one-shot snapshot: daemon liveness, execution count, revenue |
+| `jdl test [--filter SUBSTR]` | run the full test suite — the exact same suites CI runs |
+| `jdl install-swarm-boot` | install the always-on scanner's boot hook (Termux:Boot, or prints nohup/systemd steps elsewhere) |
 
 ### Start the interactive terminal UI
 
 ```bash
-flashloan                       # runs from ANY directory after the install above
-# equivalent: python3 -m jdl_flash.flash_loan_engine
+jdl run                         # runs from ANY directory after the install above
+# equivalent: flashloan, or python3 -m jdl_flash.flash_loan_engine
 ```
 
 You will see the FLASH ASCII banner and this menu:
@@ -656,7 +674,7 @@ The supervisor runs the engine as a managed background process with auto-restart
 
 ```bash
 source ~/.flash_venv/bin/activate
-python3 python/flash_supervisor.py
+jdl supervisor                  # equivalent: python3 python/flash_supervisor.py
 ```
 
 **Features:**
@@ -683,7 +701,7 @@ After=network.target
 Type=simple
 User=YOUR_USER
 WorkingDirectory=/path/to/jdl-production-core
-ExecStart=/bin/bash -c 'source ~/.flash_venv/bin/activate && python3 python/flash_supervisor.py'
+ExecStart=/bin/bash -c 'source ~/.flash_venv/bin/activate && jdl supervisor'
 Restart=on-failure
 RestartSec=10
 
@@ -960,7 +978,7 @@ in ~1 round-trip, not 6×).
 wallet's transactions are always serialized on-chain by nonce order no matter how many
 workers find opportunities. Configure `SWARM_KEYS` + `SWARM_CONTRACTS` (see
 `.env.template`): each wallet must own its **own** deployed `NexusFlashReceiver`
-instance (deploy one per wallet with `deploy_receiver.py`/`deploy_gelato.py`, passing
+instance (deploy one per wallet with `jdl deploy receiver`/`jdl deploy gelato`, passing
 that wallet as owner — no Solidity change needed, since a contract just has exactly one
 owner). Leave both unset to keep the single-wallet fallback (unchanged default
 behavior). A per-wallet lock serializes nonce-fetch+sign+broadcast for that wallet if
@@ -979,9 +997,9 @@ stopped:
 
 ```bash
 source ~/.flash_venv/bin/activate
-python3 python/flash_supervisor.py swarm      # supervised: auto-restarts on crash
+jdl supervisor swarm            # supervised: auto-restarts on crash
 # or, unsupervised:
-python3 -m jdl_flash.swarm_daemon
+jdl swarm
 ```
 
 `flash_supervisor.py` (see [Supervisor](#supervisor)) now takes an optional target —
@@ -990,7 +1008,8 @@ python3 -m jdl_flash.swarm_daemon
 `SWARM_BATCH_ROUNDS`/`SWARM_INTERVAL` alongside the existing `SWARM_WORKERS` /
 `SWARM_KEYS` / `SWARM_CONTRACTS` from above.
 
-**Surviving reboots/OOM kills on Android:** `bash setup.sh swarm-boot` installs a
+**Surviving reboots/OOM kills on Android:** `jdl install-swarm-boot` (equivalent:
+`bash setup.sh swarm-boot`) installs a
 Termux:Boot hook (`scripts/termux-boot-swarm.sh` → `~/.termux/boot/`) that starts the
 supervised swarm daemon automatically after every reboot, holding a
 `termux-wake-lock` so Android doesn't suspend it to save battery (needs the
@@ -1014,7 +1033,7 @@ Set `GELATO_ENABLED=1` in `~/jdl/.env` to run without ever holding ETH. Every ar
 is submitted through Gelato Relay (ERC-2771 `callWithSyncFee`): Gelato pays the Arbitrum
 gas and is reimbursed from the trade's profit (in the loan asset), atomically. The fee is
 bounded by an owner-signed `maxFee`, so it can never exceed the profit — if it would, the
-trade reverts and nothing moves. One-time gasless deploy: `python3 -m jdl_flash.deploy_gelato`
+trade reverts and nothing moves. One-time gasless deploy: `jdl deploy gelato`
 (needs `GELATO_SPONSOR_API_KEY` + ~$1 USDC in Gelato 1Balance). **Dry-run on Arbitrum
 Sepolia first** — Gelato sponsors testnet gas for free.
 
