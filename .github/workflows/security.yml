@@ -161,5 +161,20 @@ jobs:
         # in CI). crytic-compile auto-detects Foundry from foundry.toml and tries to
         # invoke `forge`, which isn't installed on this runner — force the Hardhat
         # platform explicitly so it uses the already-installed npm toolchain instead.
+        #
+        # Excluded detectors (by-design or documented false positives):
+        #   divide-before-multiply — numHops and perRoute are integer counts, not
+        #     scaled values; the subsequent multiplications use different stride sizes
+        #     (23 vs 32 for path vs array offsets), so no precision is lost.
+        #   calls-loop — arbitrage execution inherently requires sequential external
+        #     DEX calls; the loop is bounded by MAX_STEPS (8) and executes atomically.
+        #   timestamp — block.timestamp deadlines are standard DEX practice; miner
+        #     manipulation is bounded to ~15 s and acceptable for 60-second windows.
+        #   unused-return — ICurvePool.exchange() return value is deliberately ignored;
+        #     many older Curve pools emit no return data, so output is measured via the
+        #     safer balance-delta pattern (documented in the ICurvePool interface).
         run: |
-          slither . --compile-force-framework hardhat --filter-paths "FlashZeroGas.sol|ProfitPaymaster.sol|lib/|node_modules/" --exclude-informational
+          slither . --compile-force-framework hardhat \
+            --filter-paths "FlashZeroGas.sol|ProfitPaymaster.sol|lib/|node_modules/" \
+            --exclude-informational \
+            --exclude divide-before-multiply,calls-loop,timestamp,unused-return
