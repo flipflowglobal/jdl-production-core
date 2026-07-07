@@ -62,7 +62,9 @@ def main():
         "status": cli.cmd_status,
         "test": cli.cmd_test,
         "install-swarm-boot": cli.cmd_install,
+        "install": cli.cmd_setup,
         "update": cli.cmd_update,
+        "integrate": cli.cmd_integrate,
     }
     for name, expected_func in routing.items():
         args = parser.parse_args([name])
@@ -73,6 +75,38 @@ def main():
           "'supervisor swarm' routes to cmd_supervisor with target='swarm'")
     args = parser.parse_args(["supervisor"])
     check(args.target is None, "'supervisor' with no target leaves target=None (resolve_target's own default applies)")
+
+    # ── plain-English multi-word phrasing ──
+    args = parser.parse_args(["start", "flashloan"])
+    check(args.func is cli.cmd_start and args.target == "flashloan", "'start flashloan' routes to cmd_start")
+    args = parser.parse_args(["start"])
+    check(args.target == "flashloan", "'start' with no target defaults to 'flashloan'")
+
+    args = parser.parse_args(["test", "system"])
+    check(args.func is cli.cmd_test and args.scope == "system", "'test system' routes to cmd_test with scope='system'")
+    args = parser.parse_args(["test"])
+    check(args.scope is None, "'test' with no scope leaves scope=None (plain suite run)")
+
+    args = parser.parse_args(["show", "flashloans"])
+    check(args.func is cli.cmd_show and args.target == "flashloans", "'show flashloans' routes to cmd_show")
+    args = parser.parse_args(["show"])
+    check(args.target == "flashloans", "'show' with no target defaults to 'flashloans'")
+    check(args.interval == 5.0 and args.once is False, "'show' defaults: interval=5.0, once=False")
+
+    args = parser.parse_args(["integrate", "--watch", "--interval", "3"])
+    check(args.watch is True and args.interval == 3.0, "'integrate --watch --interval 3' threads both through")
+    args = parser.parse_args(["integrate"])
+    check(args.watch is False, "'integrate' defaults --watch to False")
+
+    # ── cmd_start actually dispatches to cmd_run ──
+    real_cmd_run = cli.cmd_run
+    try:
+        calls = []
+        cli.cmd_run = lambda a: calls.append(a) or 0
+        rc = cli.cmd_start(SimpleNamespace(target="flashloan"))
+        check(rc == 0 and len(calls) == 1, "cmd_start('flashloan') calls cmd_run exactly once")
+    finally:
+        cli.cmd_run = real_cmd_run
 
     args = parser.parse_args(["deploy", "receiver"])
     check(args.func is cli.cmd_deploy and args.target == "receiver", "'deploy receiver' routes correctly")
@@ -151,6 +185,8 @@ def main():
     result = subprocess.run(["jdl", "--help"], capture_output=True, text=True)
     check(result.returncode == 0, "installed `jdl` console-script runs")
     check("install-swarm-boot" in result.stdout, "`jdl --help` lists every subcommand")
+    for name in ("install", "start", "show", "integrate"):
+        check(name in result.stdout, f"`jdl --help` lists the '{name}' subcommand")
 
     print(f"\nResults: {passed}/{passed + failed} passed")
     return 0 if failed == 0 else 1

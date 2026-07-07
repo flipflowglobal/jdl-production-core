@@ -17,9 +17,9 @@ file path instead, same module, no copy-paste.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 
@@ -34,25 +34,24 @@ _PACKAGED_TESTS = [
     "test_swarm_daemon.py",
     "test_config_validation.py",
     "test_revenue_reconciliation.py",
+    "test_env_autowire.py",
+    "test_platform_detect.py",
+    "test_integrate.py",
     "test_cli.py",
 ]
 
 
 def _python_dir() -> Path:
     """The repo's python/ directory (this package's parent)."""
-    import jdl_flash
+    from jdl_flash._paths import python_dir
 
-    return Path(jdl_flash.__file__).resolve().parent.parent
+    return python_dir()
 
 
 def _load_flash_supervisor() -> ModuleType:
-    path = _python_dir() / "flash_supervisor.py"
-    spec = importlib.util.spec_from_file_location("flash_supervisor", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not load flash_supervisor.py from {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    from jdl_flash._paths import load_flash_supervisor
+
+    return load_flash_supervisor()
 
 
 def cmd_run(_args: argparse.Namespace) -> int:
@@ -60,6 +59,14 @@ def cmd_run(_args: argparse.Namespace) -> int:
 
     _run()
     return 0
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    """`jdl start flashloan` — plain-English alias for `jdl run` (the
+    interactive engine's terminal dashboard)."""
+    if args.target == "flashloan":
+        return cmd_run(args)
+    raise ValueError(f"unknown start target: {args.target!r}")  # unreachable — argparse enforces choices
 
 
 def cmd_pro(_args: argparse.Namespace) -> int:
@@ -142,6 +149,110 @@ def cmd_install(args: argparse.Namespace) -> int:
     return subprocess.run(["bash", str(setup_sh), "swarm-boot"]).returncode
 
 
+def cmd_setup(_args: argparse.Namespace) -> int:
+    """`jdl install` — the plain-English one-shot setup: detect the platform
+    (Termux/UserLAnd/WSL/Ubuntu/macOS/native Windows), run the matching
+    dependency installer (setup.sh's Python/Node/Foundry/Rust steps on every
+    POSIX platform, scripts/setup.ps1 on native Windows), then auto-wire
+    ~/jdl/.env from every .env file reachable on this machine — no directory
+    names needed, no manual copy-paste."""
+    from jdl_flash.platform_detect import detect_platform, is_posix_installer
+
+    plat = detect_platform()
+    print(f"  Platform detected: {plat}")
+    repo_root = _python_dir().parent
+
+    if is_posix_installer(plat):
+        rc = subprocess.run(["bash", str(repo_root / "setup.sh")]).returncode
+    else:
+        rc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", str(repo_root / "scripts" / "setup.ps1")]
+        ).returncode
+
+    if rc != 0:
+        print("  ✗ dependency install failed — see output above.")
+        return rc
+
+    print("\n  ▶ wiring .env from every .env file reachable on this machine …")
+    from jdl_flash.env_autowire import autowire
+
+    report = autowire()
+    if report["unresolved"]:
+        print(f"\n  {len(report['unresolved'])} value(s) still need a human: {', '.join(report['unresolved'])}")
+        print("  (nobody on this machine has ever set them — add them to ~/jdl/.env by hand)")
+    else:
+        print("\n  ✓ .env fully wired — no manual edits needed.")
+    return 0
+
+
+def cmd_show(args: argparse.Namespace) -> int:
+    """`jdl show flashloans` — live activity: a status line on a loop plus a
+    tail of the supervisor's daemon.log if one exists. Reads state only
+    (never starts anything), so it's safe to run from a second shell/screen
+    alongside `jdl supervisor` or `jdl run`."""
+    fs = _load_flash_supervisor()
+    log_file = fs.LOG_FILE
+    print(f"  Watching {fs.DATA_DIR}  (Ctrl+C to stop)\n")
+    pos = log_file.stat().st_size if log_file.exists() else 0
+
+    def _tick() -> None:
+        nonlocal pos
+        tot = fs.total_profit()
+        ex = fs.exec_count()
+        alive = fs.PID_FILE.exists()
+        pid = fs.PID_FILE.read_text().strip() if alive else None
+        state = f"RUNNING (pid {pid})" if alive else "not running"
+        print(f"  [{time.strftime('%H:%M:%S')}] daemon={state}  execs={ex}  revenue=${tot:,.2f}")
+        if log_file.exists():
+            with log_file.open() as f:
+                f.seek(pos)
+                new = f.read()
+                pos = f.tell()
+            for line in new.splitlines():
+                print(f"    {line}")
+
+    if args.once:
+        _tick()
+        return 0
+
+    try:
+        while True:
+            _tick()
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print("\n  stopped.")
+    return 0
+
+
+def cmd_integrate(args: argparse.Namespace) -> int:
+    """`jdl integrate` — verifies the wiring between every system function
+    (.env, wallet/RPC reachability, deployed contract, supervised daemon) and
+    prints one line per link so a broken connection is obvious at a glance.
+    --watch re-checks on a loop, so it can be left running in a second
+    shell/screen."""
+    from jdl_flash.integrate import run_checks
+
+    def _once() -> bool:
+        results = run_checks()
+        for label, ok, detail in results:
+            mark = "✓" if ok else "✗"
+            print(f"  {mark} {label}: {detail}")
+        return all(ok for _label, ok, _detail in results)
+
+    if not args.watch:
+        return 0 if _once() else 1
+
+    try:
+        while True:
+            print(f"\n{'=' * 60}\n  {time.strftime('%H:%M:%S')}\n{'=' * 60}")
+            _once()
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print("\n  stopped.")
+    return 0
+
+
 def cmd_status(_args: argparse.Namespace) -> int:
     fs = _load_flash_supervisor()
     tot = fs.total_profit()
@@ -155,24 +266,52 @@ def cmd_status(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_test(args: argparse.Namespace) -> int:
+def _resolve_test_suites(filter_str: str | None) -> tuple[Path, list[Path]]:
     python_dir = _python_dir()
     suites = [python_dir / "jdl_flash" / name for name in _PACKAGED_TESTS]
     suites.append(python_dir / "test_flash_supervisor.py")
     suites.append(python_dir / "jdl_native" / "test_jdl_native.py")
-    if args.filter:
-        suites = [s for s in suites if args.filter in s.name]
+    if filter_str:
+        suites = [s for s in suites if filter_str in s.name]
+    return python_dir, suites
 
+
+def _run_test_suites(python_dir: Path, suites: list[Path]) -> list[Path]:
+    """Runs each suite, prints its header, returns the ones that failed."""
     failed = []
     for suite in suites:
         print(f"\n{'=' * 60}\n  {suite.relative_to(python_dir)}\n{'=' * 60}")
         rc = subprocess.run([sys.executable, str(suite)], cwd=python_dir).returncode
         if rc != 0:
-            failed.append(str(suite.relative_to(python_dir)))
+            failed.append(suite)
+    return failed
+
+
+def cmd_test(args: argparse.Namespace) -> int:
+    python_dir, suites = _resolve_test_suites(args.filter)
+    failed = _run_test_suites(python_dir, suites)
+
+    # `jdl test system` also probes every connection: if a suite failed, that
+    # may just be an unwired .env (missing key, stale value) rather than a
+    # real regression — auto-wire from every .env file on the machine and
+    # give the failed suites one more chance before reporting red.
+    if failed and getattr(args, "scope", None) == "system":
+        print(f"\n{'=' * 60}\n  {len(failed)} suite(s) failed — checking for broken/missing .env "
+              f"wiring …\n{'=' * 60}")
+        from jdl_flash.env_autowire import autowire
+
+        report = autowire()
+        if report["filled"]:
+            print(f"\n  ▶ re-running the {len(failed)} suite(s) that failed, now that "
+                  f"{len(report['filled'])} more value(s) are wired …")
+            failed = _run_test_suites(python_dir, failed)
+        elif report["unresolved"]:
+            print(f"\n  no new values found anywhere on this machine for: {', '.join(report['unresolved'])}")
 
     print(f"\n{'=' * 60}")
     if failed:
-        print(f"  FAILED: {len(failed)}/{len(suites)} suite(s) — {', '.join(failed)}")
+        names = [str(s.relative_to(python_dir)) for s in failed]
+        print(f"  FAILED: {len(failed)}/{len(suites)} suite(s) — {', '.join(names)}")
         return 1
     print(f"  All {len(suites)} suites passed")
     return 0
@@ -191,6 +330,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "swarm", help="run the always-on parallel scanner in the foreground (unattended, no menu)"
     ).set_defaults(func=cmd_swarm)
+
+    p_start = sub.add_parser("start", help="plain-English: 'jdl start flashloan' launches the terminal dashboard")
+    p_start.add_argument("target", nargs="?", default="flashloan", choices=["flashloan"])
+    p_start.set_defaults(func=cmd_start)
 
     p_super = sub.add_parser("supervisor", help="run a target under the auto-restart supervisor")
     p_super.add_argument(
@@ -211,13 +354,36 @@ def build_parser() -> argparse.ArgumentParser:
         "install-swarm-boot", help="install the always-on scanner's boot hook (Termux:Boot, or nohup/systemd steps elsewhere)"
     ).set_defaults(func=cmd_install)
 
+    sub.add_parser(
+        "install",
+        help="plain-English: detect the platform, install every dependency "
+             "(python/node/hardhat/foundry/rust), auto-wire .env",
+    ).set_defaults(func=cmd_setup)
+
     p_update = sub.add_parser("update", help="git pull + reinstall — brings every jdl/flashloan/flashpro command up to date")
     p_update.add_argument("--force", action="store_true", help="pull even if the working tree has local changes")
     p_update.set_defaults(func=cmd_update)
 
     p_test = sub.add_parser("test", help="run the full test suite (same suites CI runs)")
+    p_test.add_argument(
+        "scope", nargs="?", default=None, choices=["system"],
+        help="'system' also auto-wires .env and retries any suite that failed because of it",
+    )
     p_test.add_argument("--filter", default=None, help="only run suites whose filename contains this substring")
     p_test.set_defaults(func=cmd_test)
+
+    p_show = sub.add_parser("show", help="plain-English: 'jdl show flashloans' streams live activity")
+    p_show.add_argument("target", nargs="?", default="flashloans", choices=["flashloans"])
+    p_show.add_argument("--interval", type=float, default=5.0, help="seconds between refreshes (default: 5)")
+    p_show.add_argument("--once", action="store_true", help="print a single snapshot and exit")
+    p_show.set_defaults(func=cmd_show)
+
+    p_integrate = sub.add_parser(
+        "integrate", help="verify the wiring between every system function (.env, RPC, contract, daemon)"
+    )
+    p_integrate.add_argument("--watch", action="store_true", help="keep re-checking on a loop (for a second shell/screen)")
+    p_integrate.add_argument("--interval", type=float, default=10.0, help="seconds between checks in --watch mode")
+    p_integrate.set_defaults(func=cmd_integrate)
 
     return parser
 

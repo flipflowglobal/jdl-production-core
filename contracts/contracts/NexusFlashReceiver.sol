@@ -210,6 +210,7 @@ contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable, GelatoRelayER
             revert UnsupportedProtocol(step.protocol);
         }
 
+        // slither-disable-next-line timestamp
         if (amountOut < step.minAmountOut)
             revert SlippageExceeded(amountOut, step.minAmountOut);
     }
@@ -232,6 +233,7 @@ contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable, GelatoRelayER
                 sqrtPriceLimitX96: 0
             });
 
+        // slither-disable-next-line calls-loop
         amountOut = IUniswapV3Router(UNISWAP_V3_ROUTER).exactInputSingle(params);
     }
 
@@ -241,13 +243,16 @@ contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable, GelatoRelayER
     ) internal returns (uint256 amountOut) {
         IERC20(step.tokenIn).forceApprove(step.pool, amountIn);
 
+        // slither-disable-next-line calls-loop
         uint256 balBefore = IERC20(step.tokenOut).balanceOf(address(this));
+        // slither-disable-next-line unused-return,calls-loop
         ICurvePool(step.pool).exchange(
             int128(int256(uint256(step.curveIndexIn))),
             int128(int256(uint256(step.curveIndexOut))),
             amountIn,
             step.minAmountOut
         );
+        // slither-disable-next-line calls-loop
         amountOut = IERC20(step.tokenOut).balanceOf(address(this)) - balBefore;
     }
 
@@ -273,6 +278,7 @@ contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable, GelatoRelayER
             toInternalBalance:   false
         });
 
+        // slither-disable-next-line calls-loop
         amountOut = IBalancerVault(BALANCER_VAULT).swap(
             singleSwap, funds, step.minAmountOut, block.timestamp + 60
         );

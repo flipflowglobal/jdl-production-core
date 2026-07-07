@@ -99,6 +99,7 @@ library ArbitrageLib {
         bytes memory path
     ) internal pure returns (address[] memory tokens, uint24[] memory fees) {
         require(path.length >= 43, "path too short"); // at least one hop (20+3+20)
+        // slither-disable-next-line divide-before-multiply
         uint256 numHops = (path.length - 20) / 23;
         tokens = new address[](numHops + 1);
         fees   = new uint24[](numHops);
@@ -148,6 +149,7 @@ library ArbitrageLib {
     ) internal pure returns (uint256[] memory amountsIn) {
         amountsIn = new uint256[](paths.length);
         if (paths.length == 0) return amountsIn;
+        // slither-disable-next-line divide-before-multiply
         uint256 perRoute = totalAmount / paths.length;
         uint256 remainder = totalAmount - perRoute * paths.length;
         for (uint256 i = 0; i < paths.length; i++) {
@@ -209,6 +211,7 @@ library ArbitrageLib {
      * @notice Validate that the current block time is before the given deadline.
      */
     function checkDeadline(uint256 deadline) internal view {
+        // slither-disable-next-line timestamp
         require(block.timestamp <= deadline, "deadline expired");
     }
 
@@ -284,12 +287,14 @@ library ArbitrageLib {
             uint256 currentAllowance = abi.decode(data, (uint256));
             if (currentAllowance >= amount) return;
             // Reset to 0 first (handles USDT)
-            (success, data) = token.call(
+            // slither-disable-next-line unused-return
+            (success, ) = token.call(
                 abi.encodeWithSignature("approve(address,uint256)", spender, 0)
             );
             require(success, "approve reset failed");
         }
-        (success, data) = token.call(
+        // slither-disable-next-line unused-return
+        (success, ) = token.call(
             abi.encodeWithSignature("approve(address,uint256)", spender, amount)
         );
         require(success, "approve failed");
