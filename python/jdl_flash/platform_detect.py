@@ -41,7 +41,11 @@ def detect_platform() -> str:
         return TERMUX
 
     proc_version = _proc_version()
-    if "userland" in proc_version:
+    # Matches setup.sh's own long-standing heuristic (`grep -qi
+    # 'userland\|android' /proc/version`) exactly, so this Python-side check
+    # and the bash script it's about to hand off to never disagree about
+    # what device they're running on.
+    if "userland" in proc_version or "android" in proc_version:
         return USERLAND
 
     if "microsoft" in proc_version:

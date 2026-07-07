@@ -53,6 +53,13 @@ def main():
         pd._proc_version = lambda: "linux version ... userland ..."
         check(pd.detect_platform() == pd.USERLAND, "'userland' in /proc/version -> userland")
 
+        # ── UserLAnd: the 'android' marker too — real UserLAnd installs often
+        # don't literally say "userland" in their kernel string, only
+        # "android" (this is the exact regex setup.sh's own bash detection
+        # has used for a long time: 'userland\|android') ──
+        pd._proc_version = lambda: "linux version ... -android-... ..."
+        check(pd.detect_platform() == pd.USERLAND, "'android' in /proc/version -> userland, same as setup.sh")
+
         # ── WSL: /proc/version marker ──
         pd._proc_version = lambda: "linux version ... microsoft-standard-wsl2 ..."
         check(pd.detect_platform() == pd.WSL, "'microsoft' in /proc/version -> wsl")

@@ -19,44 +19,46 @@ git clone https://github.com/flipflowglobal/jdl-production-core.git \
 cd ~/projects/jdl-production-core
 ```
 
-### 3. Run setup (auto-detects Termux)
+### 3. Run setup (auto-detects Termux — same as `jdl install`)
 ```bash
 bash setup.sh
 ```
-This installs `web3==5.31.4` — pure Python, **no Rust/Cargo**, safe on mobile data.
+This installs `web3==5.31.4` — pure Python, **no Rust/Cargo**, safe on mobile data
+(the optional `node/`/`rust/hotpath/` server-side stack is skipped entirely on
+Termux — see `POLYGLOT.md`). It also **auto-wires `~/jdl/.env`**: it scans every
+`.env*` file already on your device and copies in any real value it finds for a
+key that's still a placeholder — no manual copy-paste, nothing to remember.
 
-### 4. Edit config
+### 4. Fill in whatever's still missing
 ```bash
-mkdir -p ~/jdl
-nano ~/jdl/.env
+jdl integrate
 ```
-Minimum required fields:
+This prints exactly which values (if any) nobody on the device has ever set —
+almost always just:
 ```
 PRIVATE_KEY=0x...          # your wallet private key
 ALCHEMY_ARB_KEY=...        # free key from alchemy.com → Arbitrum One
 ```
-`FLASH_CONTRACT_ADDRESS` is **optional** — engine runs in scan mode without it.
+Add those to `~/jdl/.env` (`nano ~/jdl/.env`). `FLASH_CONTRACT_ADDRESS` is
+**optional** — the engine runs in scan mode without it.
 
 ### 5. Launch
 ```bash
 source ~/.flash_venv/bin/activate
-# Note: engine.py has been modularized to trading_core.py
-python3 python/trading_core.py
+jdl start flashloan        # same as: jdl run
 ```
 
 ### 6. Keep running (optional)
 ```bash
-termux-wake-lock                          # prevent CPU sleep
-nohup python3 python/trading_core.py > ~/flash.log 2>&1 &
-tail -f ~/flash.log                       # watch live output
+termux-wake-lock                  # prevent CPU sleep
+nohup jdl supervisor &            # auto-restart on crash
+jdl show flashloans               # watch live activity from a 2nd shell
 ```
 
 ## Pull updates
 ```bash
 cd ~/projects/jdl-production-core
-git pull origin main
-source ~/.flash_venv/bin/activate
-pip install --no-cache-dir -r python/requirements.txt
+jdl update                        # git pull + reinstall, one command
 # Run security audit after update
 bash scripts/security-audit.sh
 ```
@@ -71,7 +73,7 @@ bash scripts/security-audit.sh
 | `[5]` | Algorithm dashboard |
 | `[6]` | System status |
 | `[7]` | Configuration |
-| `[8]` | Run 56 tests |
+| `[8]` | Run tests (or from a shell: `jdl test`) |
 | `[9]` | Discover flash loan protocols (live on-chain) |
 | `[0]` | Exit |
 
@@ -95,5 +97,20 @@ Your wallet needs **zero ETH** to start scanning. To execute live trades, set `F
 | `error: maturin failed` | You have old `web3>=6`. Run: `pip install web3==5.31.4` |
 | `No module named 'web3'` | Run: `source ~/.flash_venv/bin/activate` |
 | `venv creation failed` | Run: `pkg reinstall python` |
-| `Connection refused` (RPC) | Add `ALCHEMY_ARB_KEY` to `~/jdl/.env` |
+| `Connection refused` (RPC) | Add `ALCHEMY_ARB_KEY` to `~/jdl/.env`, then check with `jdl integrate` |
 | Screen goes to sleep | Run: `termux-wake-lock` before launching |
+| Not sure what's broken | Run `jdl test system` — it auto-heals `.env` and retries any failed test |
+
+## The plain-English CLI
+
+Every command above is a `jdl` subcommand (`jdl --help` lists them all):
+
+| Command | What it does |
+|---------|--------------|
+| `jdl install` | Re-run setup: install deps, auto-wire `.env` (same as `bash setup.sh`) |
+| `jdl start flashloan` | Launch the interactive engine |
+| `jdl test system` | Run the full test suite; auto-heals `.env` and retries on failure |
+| `jdl supervisor` | Auto-restart supervisor with live status (run from a 2nd shell) |
+| `jdl show flashloans` | Stream live activity/logs |
+| `jdl integrate` | Check every connection (`.env`, RPC, contract, daemon) is wired |
+| `jdl update` | `git pull` + reinstall in one command |
