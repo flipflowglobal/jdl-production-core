@@ -167,22 +167,84 @@ pip install $PIP_FLAGS --no-deps --upgrade 'parsimonious>=0.10'
 pip install $PIP_FLAGS -e "$SCRIPT_DIR/python"
 ok "Dependencies installed (web3 5.31.4 + parsimonious fix); 'jdl' command ready"
 
+# ── 3b. Node.js / npm — contracts (Hardhat/solc) + node/ hotpath ─────
+step "Checking Node.js..."
+if command -v npm &>/dev/null; then
+    ok "npm found ($(npm --version))"
+    for d in "$SCRIPT_DIR/contracts" "$SCRIPT_DIR/node"; do
+        if [ -f "$d/package.json" ]; then
+            step "npm install in $(basename "$d")..."
+            (cd "$d" && npm install --no-audit --no-fund --quiet) \
+                && ok "$(basename "$d") dependencies installed" \
+                || warn "$(basename "$d") npm install failed — see above (non-fatal)"
+        fi
+    done
+else
+    warn "npm not found — skipping contracts/node dependency install."
+    if [ "$IS_TERMUX" = "1" ]; then
+        info "Install with: pkg install nodejs"
+    else
+        info "Install with: sudo apt install nodejs npm  (or use nvm)"
+    fi
+fi
+
+# ── 3c. Foundry (forge/cast) — Solidity toolchain ────────────────────
+step "Checking Foundry..."
+if command -v forge &>/dev/null; then
+    ok "forge found ($(forge --version 2>/dev/null | head -1))"
+else
+    warn "forge not found — attempting install via foundryup..."
+    if curl -L https://foundry.paradigm.xyz 2>/dev/null | bash 2>/dev/null; then
+        export PATH="$HOME/.foundry/bin:$PATH"
+        "$HOME/.foundry/bin/foundryup" 2>/dev/null || true
+    fi
+    command -v forge &>/dev/null \
+        && ok "Foundry installed" \
+        || warn "Foundry auto-install didn't complete (no network, or unsupported platform) — install manually: https://getfoundry.sh"
+fi
+
+# ── 3d. Rust — jdl_native's optional hotpath extension ───────────────
+step "Checking Rust..."
+if command -v cargo &>/dev/null; then
+    ok "cargo found ($(cargo --version))"
+elif [ "$IS_TERMUX" = "1" ]; then
+    warn "cargo not found — installing via pkg..."
+    pkg install -y rust 2>/dev/null && ok "Rust installed" \
+        || warn "Rust install failed (non-fatal — pure-Python fallback still works, see POLYGLOT.md)"
+else
+    warn "cargo not found — installing via rustup..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs 2>/dev/null | sh -s -- -y 2>/dev/null \
+        && source "$HOME/.cargo/env" && ok "Rust installed" \
+        || warn "Rust install failed (non-fatal — pure-Python/ctypes fallback still works, see POLYGLOT.md)"
+fi
+if command -v cargo &>/dev/null && [ -f "$SCRIPT_DIR/rust/hotpath/Cargo.toml" ]; then
+    step "Building rust/hotpath (release, best-effort)..."
+    (cd "$SCRIPT_DIR/rust/hotpath" && cargo build --release --quiet) \
+        && ok "rust/hotpath built" \
+        || warn "rust/hotpath build failed — fallbacks still work (see POLYGLOT.md)"
+fi
+
 # ── 4. Data directory ────────────────────────────────────────
 step "Creating data directory at $DATA_DIR..."
 mkdir -p "$DATA_DIR"
 ok "Data directory ready"
 
-# ── 5. Environment file ───────────────────────────────────────
-step "Setting up environment config at $ENV_FILE..."
+# ── 5. Environment file — auto-wired, no manual copy-paste ────
+step "Wiring $ENV_FILE from every .env file reachable on this machine..."
 mkdir -p "$ENV_DIR"
-if [ ! -f "$ENV_FILE" ]; then
-    cp "$SCRIPT_DIR/.env.template" "$ENV_FILE"
-    warn "Created $ENV_FILE from template"
-    echo -e "  ${YELLOW}Edit it now:  nano $ENV_FILE${RESET}"
-    echo -e "  ${YELLOW}Required:     PRIVATE_KEY  ALCHEMY_ARB_KEY${RESET}"
-    echo -e "  ${YELLOW}Optional:     FLASH_CONTRACT_ADDRESS (scan mode works without it)${RESET}"
+AUTOWIRE_OUT=$($PYTHON -c "
+from jdl_flash.env_autowire import autowire
+report = autowire()
+print('UNRESOLVED:' + ','.join(report['unresolved']))
+" 2>&1)
+echo "$AUTOWIRE_OUT" | grep -v '^UNRESOLVED:' || true
+UNRESOLVED_LINE=$(echo "$AUTOWIRE_OUT" | grep '^UNRESOLVED:' || true)
+UNRESOLVED="${UNRESOLVED_LINE#UNRESOLVED:}"
+if [ -n "$UNRESOLVED" ]; then
+    warn "Still need a human for: $UNRESOLVED"
+    echo -e "  ${YELLOW}Nobody on this machine has ever set these — add them by hand:  nano $ENV_FILE${RESET}"
 else
-    ok "$ENV_FILE already exists"
+    ok "$ENV_FILE fully wired — no manual edits needed"
 fi
 
 # ── 6. Summary ───────────────────────────────────────────────
@@ -198,12 +260,16 @@ echo -e "  ${CYAN}●${RESET} Radiant Capital 0xF4B1...9E1   0.09% fee"
 echo -e "  ${DIM}●${RESET} Uniswap V3      multiple pools  0.05–0.30% fee"
 echo
 echo -e "  ${BOLD}Next steps:${RESET}"
-echo -e "  1. ${CYAN}nano $ENV_FILE${RESET}      — add PRIVATE_KEY + ALCHEMY_ARB_KEY"
-echo -e "  2. ${CYAN}jdl run${RESET}             — launch the engine (or: bash setup.sh run)"
+echo -e "  1. ${CYAN}jdl integrate${RESET}       — verify every connection is wired (env/RPC/contract/daemon)"
+echo -e "  2. ${CYAN}jdl start flashloan${RESET} — launch the engine (same as: jdl run)"
 echo -e "  3. Press ${BOLD}[9]${RESET} in the menu  — discover live protocol liquidity"
-echo -e "  4. ${CYAN}jdl test${RESET}            — run the full test suite (or: bash setup.sh test)"
-echo -e "  ${DIM}One CLI for everything — 'jdl --help' lists every command (run/pro/swarm/"
-echo -e "  supervisor/deploy/status/test).${RESET}"
+echo -e "  4. ${CYAN}jdl test system${RESET}     — run the full test suite; auto-heals .env if a suite fails"
+echo -e "  ${DIM}Any value \`jdl integrate\` flags as unresolved has never been set anywhere on this"
+echo -e "  machine — add it by hand: nano $ENV_FILE${RESET}"
+echo
+echo -e "  ${BOLD}Plain-English CLI — 'jdl --help' lists every command:${RESET}"
+echo -e "  ${DIM}install (this script) · start flashloan · test system · supervisor ·"
+echo -e "  show flashloans · integrate · update · status · deploy${RESET}"
 echo
 
 if [ "$IS_TERMUX" = "1" ]; then

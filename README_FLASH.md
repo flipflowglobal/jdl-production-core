@@ -121,19 +121,45 @@ git checkout flashloan
 # 2. Run the automated setup
 bash setup.sh
 ```
+(Once `jdl` is installed, `jdl install` re-runs this same script — it
+auto-detects Termux/UserLAnd/WSL/Ubuntu/macOS and picks `setup.sh`, or native
+Windows and picks `scripts/setup.ps1`.)
 
 The setup script will:
-- Check Python version
-- Create a virtual environment at `~/.flash_venv/`
+- Detect the platform (Termux, UserLAnd, WSL, Ubuntu/Linux, macOS)
+- Check Python version, create a virtual environment at `~/.flash_venv/`
 - Install all Python dependencies
+- Install Node/npm dependencies for `contracts/` (Hardhat/solc) and `node/`
+- Install Foundry (forge/cast) if missing
+- Install Rust and build `rust/hotpath` (best-effort — pure-Python/ctypes
+  fallbacks work either way, see `POLYGLOT.md`)
 - Create the data directory at `~/.flash_loan_engine/`
-- Copy `.env.template` → `~/jdl/.env` (if it doesn't exist)
+- **Auto-wire `~/jdl/.env`**: scans every `.env*` file reachable from the repo
+  root and your home directory and copies in any real value it finds for a
+  key that's still unset or a placeholder — no directory names to remember,
+  nothing to copy-paste by hand. Only keys nobody has ever set anywhere are
+  left for you to fill in.
 - Print next steps
 
-After setup, **edit your .env file** (see below), then:
+After setup, run `jdl integrate` to see exactly which values (if any) still
+need a human, then:
 ```bash
-bash setup.sh run
+jdl start flashloan   # same as: jdl run / bash setup.sh run
 ```
+
+### The plain-English CLI
+
+Once installed, every command below is a `jdl` subcommand (`jdl --help`
+lists them all):
+
+| Command               | What it does                                                             |
+|------------------------|---------------------------------------------------------------------------|
+| `jdl install`          | Detect platform, install every dependency, auto-wire `.env`              |
+| `jdl start flashloan`  | Launch the interactive engine (terminal dashboard)                       |
+| `jdl test system`      | Run the full test suite; auto-heals `.env` and retries on failure        |
+| `jdl supervisor`       | Auto-restart supervisor with real-time status (run from a 2nd shell)     |
+| `jdl show flashloans`  | Stream live activity/logs (safe to run alongside anything else)          |
+| `jdl integrate`        | Verify every connection (`.env`, RPC, contract, daemon) is actually wired |
 
 ---
 
