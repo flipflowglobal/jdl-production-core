@@ -52,6 +52,36 @@ def main():
         ok, _ = ig.check_required_keys(env_set)
         check(ok is True, "check_required_keys: real values -> ok")
 
+        # ── ALCHEMY_ARB_KEY satisfies the RPC requirement even with RPC_URL
+        # left at .env.template's own default (the engine's actual RPC
+        # priority order — see flash_loan_engine.py's _build_rpc_endpoints) ──
+        env_alchemy = tmp / "alchemy.env"
+        env_alchemy.write_text(
+            "PRIVATE_KEY=0xabc123\n"
+            "RPC_URL=https://arb-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY_HERE\n"
+            "ALCHEMY_ARB_KEY=real-key-abc123\n"
+        )
+        ok, detail = ig.check_required_keys(env_alchemy)
+        check(ok is True, "check_required_keys: ALCHEMY_ARB_KEY alone satisfies the RPC requirement")
+
+        env_neither = tmp / "neither.env"
+        env_neither.write_text(
+            "PRIVATE_KEY=0xabc123\n"
+            "RPC_URL=https://arb-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY_HERE\n"
+        )
+        ok, detail = ig.check_required_keys(env_neither)
+        check(ok is False, "check_required_keys: template-default RPC_URL with no ALCHEMY_ARB_KEY -> not ok")
+        check("RPC_URL" in detail, "check_required_keys: flags the missing RPC source")
+
+        # ── _resolve_rpc_url: pure priority logic, no network ──
+        check(ig._resolve_rpc_url({"ALCHEMY_ARB_KEY": "abc", "RPC_URL": "https://example.com"})
+              == "https://arb-mainnet.g.alchemy.com/v2/abc",
+              "_resolve_rpc_url: prefers ALCHEMY_ARB_KEY over RPC_URL, same as the engine")
+        check(ig._resolve_rpc_url({"RPC_URL": "https://example.com/rpc"}) == "https://example.com/rpc",
+              "_resolve_rpc_url: falls back to RPC_URL when no Alchemy key")
+        check(ig._resolve_rpc_url({"RPC_URL": "https://x/v2/YOUR_ALCHEMY_KEY_HERE"}) is None,
+              "_resolve_rpc_url: template-default RPC_URL with nothing else -> None")
+
         # ── check_contract_address ──
         env_zero = tmp / "zero.env"
         env_zero.write_text("FLASH_CONTRACT_ADDRESS=0x0000000000000000000000000000000000000000\n")

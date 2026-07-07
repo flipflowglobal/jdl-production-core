@@ -12,7 +12,7 @@ import json
 import re
 import urllib.request
 from pathlib import Path
-from typing import Callable, List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from jdl_flash._paths import load_flash_supervisor
 from jdl_flash.env_autowire import CANONICAL_ENV, is_placeholder, parse_env_file
@@ -27,12 +27,22 @@ def check_env_file(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
     return True, str(env_path)
 
 
+def _has_rpc_source(values: dict) -> bool:
+    # Mirrors flash_loan_engine.py's _build_rpc_endpoints(): RPC_URL is not the
+    # only valid source — ALCHEMY_ARB_KEY (the key env_autowire actually fills,
+    # since .env.template's RPC_URL default isn't a placeholder by itself) is
+    # just as good, and the engine prefers it first.
+    return not is_placeholder(values.get("RPC_URL", "")) or not is_placeholder(values.get("ALCHEMY_ARB_KEY", ""))
+
+
 def check_required_keys(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
     values = parse_env_file(env_path)
-    unresolved = [k for k in ("PRIVATE_KEY", "RPC_URL") if is_placeholder(values.get(k, ""))]
+    unresolved = [k for k in ("PRIVATE_KEY",) if is_placeholder(values.get(k, ""))]
+    if not _has_rpc_source(values):
+        unresolved.append("RPC_URL or ALCHEMY_ARB_KEY")
     if unresolved:
         return False, f"still unset: {', '.join(unresolved)} — run `jdl install` to auto-wire, or set by hand"
-    return True, "PRIVATE_KEY, RPC_URL set"
+    return True, "PRIVATE_KEY and an RPC source are set"
 
 
 def check_contract_address(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
@@ -45,11 +55,23 @@ def check_contract_address(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
     return True, addr
 
 
+def _resolve_rpc_url(values: dict) -> Optional[str]:
+    # Same priority order as flash_loan_engine.py's _build_rpc_endpoints():
+    # Alchemy key first, then RPC_URL.
+    alch_arb = values.get("ALCHEMY_ARB_KEY", "")
+    if not is_placeholder(alch_arb):
+        return f"https://arb-mainnet.g.alchemy.com/v2/{alch_arb}"
+    rpc_url = values.get("RPC_URL", "")
+    if not is_placeholder(rpc_url):
+        return rpc_url
+    return None
+
+
 def check_rpc_reachable(env_path: Path = CANONICAL_ENV, timeout: float = 4.0) -> Tuple[bool, str]:
     values = parse_env_file(env_path)
-    rpc_url = values.get("RPC_URL", "")
-    if is_placeholder(rpc_url):
-        return False, "RPC_URL not set"
+    rpc_url = _resolve_rpc_url(values)
+    if rpc_url is None:
+        return False, "RPC_URL or ALCHEMY_ARB_KEY not set"
     payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": []}).encode()
     req = urllib.request.Request(
         rpc_url, data=payload, headers={"Content-Type": "application/json"}, method="POST"

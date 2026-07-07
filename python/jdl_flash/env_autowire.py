@@ -43,17 +43,23 @@ _SKIP_DIRS = {
     ".Trash", "Trash", "AppData", "Library",
 }
 
-_PLACEHOLDER_RE = re.compile(
-    r"^$|^0x0*$|^<.*>$|your[_-]|change[_-]?me|^xxx+$|^todo$|replace[_-]?me",
-    re.IGNORECASE,
-)
+# Placeholders that must be the *entire* value (an otherwise-real-looking
+# string shouldn't be flagged just because it happens to start with one of
+# these).
+_FULL_PLACEHOLDER_RE = re.compile(r"^$|^0x0*$|^<.*>$|^xxx+$|^todo$", re.IGNORECASE)
+
+# Placeholders that can appear anywhere in the value — .env.template's real
+# default is `RPC_URL=https://arb-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY_HERE`,
+# with the marker mid-string, not at position 0. Matches the same convention
+# flash_loan_engine.py already uses (`_valid_rpc`: `'YOUR_ALCHEMY' not in u`).
+_SUBSTRING_PLACEHOLDER_RE = re.compile(r"your[_-]|change[_-]?me|replace[_-]?me", re.IGNORECASE)
 
 _LINE_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
 
 
 def is_placeholder(value: str) -> bool:
     v = value.strip().strip('"').strip("'")
-    return bool(_PLACEHOLDER_RE.match(v))
+    return bool(_FULL_PLACEHOLDER_RE.match(v) or _SUBSTRING_PLACEHOLDER_RE.search(v))
 
 
 def _strip_value(raw: str) -> str:
@@ -82,17 +88,30 @@ def parse_env_file(path: Path) -> Dict[str, str]:
     return values
 
 
-def find_env_files(roots: Iterable[Path]) -> List[Path]:
-    """Every `.env*`-named file under `roots`, deduplicated, heavy/irrelevant
-    directories pruned rather than merely skipped (so the walk never descends
-    into them at all)."""
+# How many directory levels below each root to descend. $HOME can contain an
+# effectively unbounded tree (caches, unrelated projects, media libraries);
+# without a cap a fresh install's first `jdl install`/setup.sh run could walk
+# all of it before wiring a single value. Project checkouts (where real .env
+# files actually live) are rarely more than a few levels deep, so this stays
+# generous enough to find them without scanning the whole disk.
+_MAX_WALK_DEPTH = 6
+
+
+def find_env_files(roots: Iterable[Path], max_depth: int = _MAX_WALK_DEPTH) -> List[Path]:
+    """Every `.env*`-named file within `max_depth` directory levels of `roots`,
+    deduplicated, heavy/irrelevant directories pruned rather than merely
+    skipped (so the walk never descends into them at all)."""
     seen = set()
     found: List[Path] = []
     for root in roots:
         root = Path(root)
         if not root.is_dir():
             continue
+        root_depth = len(root.resolve().parts)
         for dirpath, dirnames, filenames in os.walk(root):
+            depth = len(Path(dirpath).resolve().parts) - root_depth
+            if depth >= max_depth:
+                dirnames[:] = []
             dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
             for fn in filenames:
                 if fn == ".env" or fn.startswith(".env."):

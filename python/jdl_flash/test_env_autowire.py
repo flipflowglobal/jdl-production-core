@@ -30,7 +30,11 @@ def main():
 
     # ── is_placeholder ──
     for v in ["", "0x", "0x0000000000000000000000000000000000000000", "<set-via-secrets-manager>",
-              "YOUR_ALCHEMY_KEY_HERE", "CHANGE_ME", "changeme", "xxx", "TODO"]:
+              "YOUR_ALCHEMY_KEY_HERE", "CHANGE_ME", "changeme", "xxx", "TODO",
+              # the *actual* .env.template default — marker is mid-string, not at
+              # position 0, and must still be recognized (regression: an anchored
+              # `.match()` over an unanchored alternative misses this entirely)
+              "https://arb-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY_HERE"]:
         check(ew.is_placeholder(v), f"recognizes placeholder: {v!r}")
     for v in ["0xabc123", "https://example.com", "42161", "a-real-api-key-1234"]:
         check(not ew.is_placeholder(v), f"does not flag real value as placeholder: {v!r}")
@@ -61,6 +65,27 @@ def main():
         check(str(Path("proj_b") / ".env.local") in found_names, "finds .env.local (dotted variant)")
         check(not any("node_modules" in n for n in found_names), "skips node_modules")
         check(not any(".git" in n for n in found_names), "skips .git")
+
+        # ── find_env_files: bounded depth — a fresh install must not crawl an
+        # entire unbounded $HOME before wiring a single value ──
+        deep = tmp / "proj_c"
+        for i in range(10):
+            deep = deep / f"level{i}"
+        deep.mkdir(parents=True)
+        (deep / ".env").write_text("PRIVATE_KEY=too_deep_to_matter\n")
+        (tmp / "proj_c" / "level0" / ".env").write_text("PRIVATE_KEY=shallow_and_findable\n")
+
+        found_bounded = ew.find_env_files([tmp], max_depth=3)
+        bounded_names = {str(p.relative_to(tmp)) for p in found_bounded}
+        check(str(Path("proj_c") / "level0" / ".env") in bounded_names,
+              "find_env_files: still finds a shallow .env within max_depth")
+        check(not any("level9" in n for n in bounded_names),
+              "find_env_files: does not descend past max_depth")
+
+        found_unbounded = ew.find_env_files([tmp], max_depth=100)
+        unbounded_names = {str(p.relative_to(tmp)) for p in found_unbounded}
+        check(any("level9" in n for n in unbounded_names),
+              "find_env_files: a larger max_depth does reach the deep file (sanity check on the bound itself)")
 
         # ── autowire: end-to-end fill from scattered files, no duplication ──
         target_dir = tmp / "canonical"
