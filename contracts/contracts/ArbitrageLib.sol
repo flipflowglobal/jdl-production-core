@@ -284,14 +284,16 @@ library ArbitrageLib {
             uint256 currentAllowance = abi.decode(data, (uint256));
             if (currentAllowance >= amount) return;
             // Reset to 0 first (handles USDT)
-            (success, data) = token.call(
+            bool resetOk;
+            (resetOk, ) = token.call(
                 abi.encodeWithSignature("approve(address,uint256)", spender, 0)
             );
-            require(success, "approve reset failed");
+            require(resetOk, "approve reset failed");
         }
-        (success, data) = token.call(
+        bool approveOk;
+        (approveOk, ) = token.call(
             abi.encodeWithSignature("approve(address,uint256)", spender, amount)
         );
-        require(success, "approve failed");
+        require(approveOk, "approve failed");
     }
 }
