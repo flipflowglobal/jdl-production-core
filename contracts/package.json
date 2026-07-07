@@ -22,5 +22,11 @@
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.6.1"
+  },
+  "overrides": {
+    "serialize-javascript": ">=7.0.5",
+    "tmp": ">=0.2.6",
+    "undici": ">=6.27.0",
+    "ws": ">=8.21.0"
   }
 }
