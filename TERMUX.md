@@ -4,6 +4,8 @@ Zero errors, zero ETH in wallet, works on Android mobile data.
 
 > Want the long-form, step-by-step version with explanations, verification, and
 > per-step troubleshooting? See [`docs/TERMUX_WALKTHROUGH.md`](docs/TERMUX_WALKTHROUGH.md).
+> For the execution model + the assured-execution verifier, see
+> [`docs/TERMUX_DEEPDIVE.md`](docs/TERMUX_DEEPDIVE.md).
 
 ## Fastest path — one command
 

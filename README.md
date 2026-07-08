@@ -76,7 +76,7 @@ cd contracts && forge install foundry-rs/forge-std
 ARB_RPC_URL=https://arb1.arbitrum.io/rpc forge test --match-path test/NexusFlashReceiver.t.sol -vv
 ```
 
-Full guides: [`README_FLASH.md`](README_FLASH.md) · [`TERMUX.md`](TERMUX.md) · [`docs/TERMUX_WALKTHROUGH.md`](docs/TERMUX_WALKTHROUGH.md) · [`contracts/README.md`](contracts/README.md)
+Full guides: [`README_FLASH.md`](README_FLASH.md) · [`TERMUX.md`](TERMUX.md) · [`docs/TERMUX_WALKTHROUGH.md`](docs/TERMUX_WALKTHROUGH.md) · [`docs/TERMUX_DEEPDIVE.md`](docs/TERMUX_DEEPDIVE.md) · [`contracts/README.md`](contracts/README.md)
 
 ## CLI Command Reference
 
@@ -180,6 +180,8 @@ Installed by `pip install -e python/`. Run `jdl --help` or `jdl <command> --help
 
 | Command | What it does |
 |---------|--------------|
+| `bash scripts/termux-install.sh` | One-command Termux install: packages → clone → setup → verify (also as a `curl \| bash` one-liner) |
+| `bash scripts/termux-verify.sh` | Assured-execution doctor: proves the engine can run (`--fix`, `--run`, `--quick`) |
 | `bash scripts/deploy_termux.sh` | Universal Termux deployment for the revenue system |
 | `bash scripts/security-audit.sh` | Grep-based scan for hardcoded secrets, disabled CSP, sensitive logs |
 | `bash scripts/start-swarm-daemon.sh` | Foreground launcher for the swarm scanner, under supervision |
