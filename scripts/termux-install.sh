@@ -2,16 +2,25 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # termux-install.sh — ONE-COMMAND full Termux install for the JDL flash engine
 #
-# Run on a fresh Termux with a single line (no clone needed first):
+# IMPORTANT: this repo is PRIVATE, so you cannot fetch this script with a plain
+# `curl … raw.githubusercontent.com` (raw returns 404 for unauthenticated
+# requests to private repos — the pipe is empty and nothing runs). Bootstrap
+# with `git clone` instead, which uses your GitHub credentials:
 #
-#   curl -fsSL https://raw.githubusercontent.com/flipflowglobal/jdl-production-core/main/scripts/termux-install.sh | bash
+#   pkg install -y git && \
+#   git clone https://github.com/flipflowglobal/jdl-production-core.git ~/projects/jdl-production-core && \
+#   bash ~/projects/jdl-production-core/scripts/termux-install.sh
 #
-# It performs the entire on-device setup, in order:
+# (git clone on a private repo needs GitHub auth on the device — a Personal
+# Access Token entered at the HTTPS password prompt, or `gh auth login`, or an
+# SSH key with the git@ URL.)
+#
+# Once you have the repo, this script performs the rest of the setup, in order:
 #   1. Verify this is Termux (Android)
-#   2. pkg update + install the system packages the engine needs
+#   2. Install the system packages the engine needs (non-interactive)
 #   3. Clone (or update) the repo into $JDL_DIR  (default: ~/projects/jdl-production-core)
 #   4. Run setup.sh — venv at ~/.flash_venv, web3 6.x, `jdl` command, auto-wire ~/jdl/.env
-#   5. Print next steps
+#   5. Verify the install can actually execute
 #
 # Env overrides:
 #   JDL_DIR    where to clone the repo   (default: $HOME/projects/jdl-production-core)
@@ -22,7 +31,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-REPO_URL="https://github.com/flipflowglobal/jdl-production-core.git"
+REPO_URL="${JDL_REPO_URL:-https://github.com/flipflowglobal/jdl-production-core.git}"
 JDL_DIR="${JDL_DIR:-$HOME/projects/jdl-production-core}"
 JDL_BRANCH="${JDL_BRANCH:-main}"
 
@@ -49,8 +58,13 @@ fi
 ok "Termux detected"
 
 # ── 2. System packages ───────────────────────────────────────────────────
-step "Updating Termux and installing system packages…"
-pkg update -y && pkg upgrade -y
+# noninteractive frontend + non-fatal update: `pkg upgrade` is intentionally
+# NOT run here — it can pop a dpkg/apt conffile prompt that hangs forever when
+# there's no interactive tty (the classic Termux "install just hangs"). We only
+# need `pkg install`, which `-y` makes non-interactive.
+export DEBIAN_FRONTEND=noninteractive
+step "Installing system packages…"
+pkg update -y || warn "pkg update had issues — continuing to install anyway"
 # python + git are essential; openssl/libffi back the crypto libs; clang/make
 # let pip build the few wheels with no Android binary. setup.sh additionally
 # pulls the prebuilt python-rpds-py / python-psutil wheels that can't compile
@@ -66,7 +80,15 @@ if [ -d "$JDL_DIR/.git" ]; then
 else
     step "Cloning $REPO_URL → $JDL_DIR (branch $JDL_BRANCH)…"
     mkdir -p "$(dirname "$JDL_DIR")"
-    git clone "$REPO_URL" "$JDL_DIR" --branch "$JDL_BRANCH" --single-branch --depth 1
+    if ! git clone "$REPO_URL" "$JDL_DIR" --branch "$JDL_BRANCH" --single-branch --depth 1; then
+        echo
+        warn "git clone failed. This repo is PRIVATE, so cloning needs GitHub auth on this device:"
+        echo -e "  ${DIM}• HTTPS: create a Personal Access Token (repo scope) and paste it at the"
+        echo -e "    password prompt, or run 'gh auth login' if you have the gh CLI.${RESET}"
+        echo -e "  ${DIM}• SSH:   add an SSH key to GitHub, then re-run with"
+        echo -e "    JDL_REPO_URL=git@github.com:flipflowglobal/jdl-production-core.git${RESET}"
+        fail "Could not clone the repository — see auth guidance above."
+    fi
     ok "Repo cloned"
 fi
 

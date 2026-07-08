@@ -180,7 +180,7 @@ Installed by `pip install -e python/`. Run `jdl --help` or `jdl <command> --help
 
 | Command | What it does |
 |---------|--------------|
-| `bash scripts/termux-install.sh` | One-command Termux install: packages → clone → setup → verify (also as a `curl \| bash` one-liner) |
+| `bash scripts/termux-install.sh` | One-command Termux install: packages → clone → setup → verify (bootstrap via `git clone`, since this repo is private) |
 | `bash scripts/termux-verify.sh` | Assured-execution doctor: proves the engine can run (`--fix`, `--run`, `--quick`) |
 | `bash scripts/deploy_termux.sh` | Universal Termux deployment for the revenue system |
 | `bash scripts/security-audit.sh` | Grep-based scan for hardcoded secrets, disabled CSP, sensitive logs |

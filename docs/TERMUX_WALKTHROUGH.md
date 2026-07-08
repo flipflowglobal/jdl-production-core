@@ -17,18 +17,26 @@ scanning Arbitrum One for flash-loan arbitrage (optionally always-on across rebo
 
 ## TL;DR — one-command install
 
-Already have the Termux app installed? Steps 1–3 below collapse into a single line:
+Already have the Termux app installed? Steps 1–3 below collapse into a single line.
+Because this repo is **private**, bootstrap with `git clone` (which uses your GitHub
+credentials) — a plain `curl` of the raw script URL returns 404 and does nothing:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/flipflowglobal/jdl-production-core/main/scripts/termux-install.sh | bash
+pkg install -y git && \
+git clone https://github.com/flipflowglobal/jdl-production-core.git ~/projects/jdl-production-core && \
+bash ~/projects/jdl-production-core/scripts/termux-install.sh
 ```
 
 This runs [`scripts/termux-install.sh`](../scripts/termux-install.sh): it verifies
-Termux, installs the system packages, clones the repo, and runs `setup.sh` — then
-prints the next steps. It's idempotent (re-run any time; it `git pull`s if the repo is
-already there). Override the clone dir with `JDL_DIR=~/somewhere`. After it finishes,
+Termux, installs the system packages, `git pull`s the repo (already cloned above), runs
+`setup.sh`, and verifies the install — then prints the next steps. It's idempotent
+(re-run any time). Override the clone dir with `JDL_DIR=~/somewhere`. After it finishes,
 skip to **Step 4** (wire your `.env`). The rest of this document explains each stage the
 one-liner automates, for when you want to understand or do it by hand.
+
+> **Private-repo auth:** `git clone` needs GitHub credentials on the device — a Personal
+> Access Token (repo scope) at the HTTPS password prompt, `gh auth login`, or an SSH key
+> with the `git@github.com:…` URL. Nothing after the clone needs a token.
 
 ---
 
@@ -289,11 +297,13 @@ live trades, set `FLASH_CONTRACT_ADDRESS` after deploying `FlashZeroGas.sol`.
 ## Full Termux command cheat-sheet
 
 ```bash
-# ── One-time setup (one-liner) ─────────────────────────────────
-curl -fsSL https://raw.githubusercontent.com/flipflowglobal/jdl-production-core/main/scripts/termux-install.sh | bash
+# ── One-time setup (one-liner; private repo → clone, don't curl) ─
+pkg install -y git && \
+git clone https://github.com/flipflowglobal/jdl-production-core.git ~/projects/jdl-production-core && \
+bash ~/projects/jdl-production-core/scripts/termux-install.sh
 
 # ── …or the same thing by hand ─────────────────────────────────
-pkg update -y && pkg upgrade -y
+pkg update -y
 pkg install -y python git openssl libffi clang make
 mkdir -p ~/projects
 git clone https://github.com/flipflowglobal/jdl-production-core.git \

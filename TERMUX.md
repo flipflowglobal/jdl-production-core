@@ -9,15 +9,25 @@ Zero errors, zero ETH in wallet, works on Android mobile data.
 
 ## Fastest path — one command
 
-On a fresh Termux, this single line installs packages, clones the repo, and runs setup:
+This repo is **private**, so you can't `curl` the installer from
+`raw.githubusercontent.com` (raw returns 404 for unauthenticated requests to private
+repos — the pipe comes back empty and nothing happens). Bootstrap with `git clone`
+instead, which uses your GitHub credentials:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/flipflowglobal/jdl-production-core/main/scripts/termux-install.sh | bash
+pkg install -y git && \
+git clone https://github.com/flipflowglobal/jdl-production-core.git ~/projects/jdl-production-core && \
+bash ~/projects/jdl-production-core/scripts/termux-install.sh
 ```
 
-It runs [`scripts/termux-install.sh`](scripts/termux-install.sh) (idempotent — safe to
-re-run; `git pull`s if already cloned). Override the clone location with
-`JDL_DIR=~/somewhere` if you like. Then jump to step 4 below (`jdl integrate`).
+That installs the remaining packages, runs setup, and verifies the install. It runs
+[`scripts/termux-install.sh`](scripts/termux-install.sh) (idempotent — safe to re-run;
+`git pull`s if already cloned). Override the clone location with `JDL_DIR=~/somewhere`.
+Then jump to step 4 below (`jdl integrate`).
+
+> **Cloning a private repo needs GitHub auth on the device:** a Personal Access Token
+> (repo scope) pasted at the HTTPS password prompt, `gh auth login`, or an SSH key with
+> the `git@github.com:…` URL. Once cloned, everything else is local and needs no token.
 
 Prefer to do it by hand? The step-by-step blocks follow.
 

@@ -14,16 +14,23 @@ anything.
 
 ## The one-command assured install
 
+This repo is **private**, so the installer is bootstrapped with `git clone` (which
+authenticates with your GitHub credentials), **not** a `curl` of the raw script URL —
+`raw.githubusercontent.com` returns 404 for unauthenticated requests to private repos, so
+`curl … | bash` would pipe an empty stream into bash and silently do nothing:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/flipflowglobal/jdl-production-core/main/scripts/termux-install.sh | bash
+pkg install -y git && \
+git clone https://github.com/flipflowglobal/jdl-production-core.git ~/projects/jdl-production-core && \
+bash ~/projects/jdl-production-core/scripts/termux-install.sh
 ```
 
-`termux-install.sh` runs five stages and **ends by verifying itself**:
+`termux-install.sh` then runs these stages and **ends by verifying itself**:
 
 | Stage | What it does |
 |-------|--------------|
 | 1. Guard | Aborts unless it's really Termux (before touching anything) |
-| 2. Packages | `pkg update && pkg install python git openssl libffi clang make` |
+| 2. Packages | `pkg install python git openssl libffi clang make` (noninteractive; no `pkg upgrade` — that prompt hangs headless) |
 | 3. Clone | Clone (or `git pull`) into `$JDL_DIR` (default `~/projects/jdl-production-core`) |
 | 4. Setup | `bash setup.sh` — venv, deps, `jdl` command, `.env` auto-wire |
 | 5. **Verify** | `bash scripts/termux-verify.sh` — proves the engine can execute |
@@ -32,9 +39,15 @@ Stage 5 is what makes the method *assured*: the installer doesn't print "complet
 — it runs the verifier and reports **execution ASSURED** only when every blocking check
 passes. If anything is wrong it points you at `termux-verify.sh --fix`.
 
-> `curl … | bash` runs remote code unverified. For a tool that will hold keys, the safer
-> habit is to clone first and read `setup.sh` / `termux-install.sh` / `termux-verify.sh`
-> before running. Both paths are documented — pick your trust model.
+> **Why clone, not curl?** For a *public* repo a `curl … raw…/script.sh | bash` one-liner
+> works, but this repo is private — raw returns 404 unauthenticated, so that one-liner
+> fetches nothing. `git clone` uses the credentials you already use to pull the repo. It's
+> also the safer habit: you can read `setup.sh` / `termux-install.sh` / `termux-verify.sh`
+> before running anything.
+>
+> **Private-repo auth:** cloning needs GitHub credentials on the device — a Personal Access
+> Token (repo scope) at the HTTPS password prompt, `gh auth login`, or an SSH key with the
+> `git@github.com:…` URL (`JDL_REPO_URL=git@github.com:flipflowglobal/jdl-production-core.git`).
 
 ---
 
@@ -124,7 +137,8 @@ bash scripts/termux-verify.sh --quick && bash scripts/start-swarm-daemon.sh
 
 ## From verified install → assured run
 
-1. **Install & verify** — `curl … | bash` (or clone + `bash setup.sh` + `bash scripts/termux-verify.sh`).
+1. **Install & verify** — the `git clone … && bash scripts/termux-install.sh` one-liner above
+   (or clone + `bash setup.sh` + `bash scripts/termux-verify.sh` by hand).
 2. **Wire config** — `jdl integrate` shows what's unset; `nano ~/jdl/.env` to add `PRIVATE_KEY`
    / `ALCHEMY_ARB_KEY`. Re-run the verifier to confirm live-readiness turns green.
 3. **Run** — `jdl start flashloan` (interactive), or `nohup jdl supervisor &` for an
