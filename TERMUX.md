@@ -5,6 +5,20 @@ Zero errors, zero ETH in wallet, works on Android mobile data.
 > Want the long-form, step-by-step version with explanations, verification, and
 > per-step troubleshooting? See [`docs/TERMUX_WALKTHROUGH.md`](docs/TERMUX_WALKTHROUGH.md).
 
+## Fastest path — one command
+
+On a fresh Termux, this single line installs packages, clones the repo, and runs setup:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/flipflowglobal/jdl-production-core/main/scripts/termux-install.sh | bash
+```
+
+It runs [`scripts/termux-install.sh`](scripts/termux-install.sh) (idempotent — safe to
+re-run; `git pull`s if already cloned). Override the clone location with
+`JDL_DIR=~/somewhere` if you like. Then jump to step 4 below (`jdl integrate`).
+
+Prefer to do it by hand? The step-by-step blocks follow.
+
 ## Install in order — copy-paste each block
 
 ### 1. Install Termux packages
