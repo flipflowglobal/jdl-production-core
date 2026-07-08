@@ -76,7 +76,7 @@ cd contracts && forge install foundry-rs/forge-std
 ARB_RPC_URL=https://arb1.arbitrum.io/rpc forge test --match-path test/NexusFlashReceiver.t.sol -vv
 ```
 
-Full guides: [`README_FLASH.md`](README_FLASH.md) · [`TERMUX.md`](TERMUX.md) · [`contracts/README.md`](contracts/README.md)
+Full guides: [`README_FLASH.md`](README_FLASH.md) · [`TERMUX.md`](TERMUX.md) · [`docs/TERMUX_WALKTHROUGH.md`](docs/TERMUX_WALKTHROUGH.md) · [`contracts/README.md`](contracts/README.md)
 
 ## CLI Command Reference
 
