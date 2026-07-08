@@ -13,6 +13,23 @@ scanning Arbitrum One for flash-loan arbitrage (optionally always-on across rebo
 
 ---
 
+## TL;DR — one-command install
+
+Already have the Termux app installed? Steps 1–3 below collapse into a single line:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/flipflowglobal/jdl-production-core/main/scripts/termux-install.sh | bash
+```
+
+This runs [`scripts/termux-install.sh`](../scripts/termux-install.sh): it verifies
+Termux, installs the system packages, clones the repo, and runs `setup.sh` — then
+prints the next steps. It's idempotent (re-run any time; it `git pull`s if the repo is
+already there). Override the clone dir with `JDL_DIR=~/somewhere`. After it finishes,
+skip to **Step 4** (wire your `.env`). The rest of this document explains each stage the
+one-liner automates, for when you want to understand or do it by hand.
+
+---
+
 ## Step 0 — Install the Termux app (and optional companions)
 
 Install **Termux** from **F-Droid** or **GitHub**, *not* the Google Play version
@@ -270,7 +287,10 @@ live trades, set `FLASH_CONTRACT_ADDRESS` after deploying `FlashZeroGas.sol`.
 ## Full Termux command cheat-sheet
 
 ```bash
-# ── One-time setup ─────────────────────────────────────────────
+# ── One-time setup (one-liner) ─────────────────────────────────
+curl -fsSL https://raw.githubusercontent.com/flipflowglobal/jdl-production-core/main/scripts/termux-install.sh | bash
+
+# ── …or the same thing by hand ─────────────────────────────────
 pkg update -y && pkg upgrade -y
 pkg install -y python git openssl libffi clang make
 mkdir -p ~/projects
