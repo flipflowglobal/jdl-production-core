@@ -78,6 +78,115 @@ ARB_RPC_URL=https://arb1.arbitrum.io/rpc forge test --match-path test/NexusFlash
 
 Full guides: [`README_FLASH.md`](README_FLASH.md) · [`TERMUX.md`](TERMUX.md) · [`contracts/README.md`](contracts/README.md)
 
+## CLI Command Reference
+
+### `jdl` — unified CLI (`python/jdl_flash/cli.py`)
+
+Installed by `pip install -e python/`. Run `jdl --help` or `jdl <command> --help` for details.
+
+| Command | What it does |
+|---------|--------------|
+| `jdl run` | Launch the interactive engine (same as `flashloan`) |
+| `jdl start flashloan` | Plain-English alias for `jdl run` |
+| `jdl pro` | Launch the advanced 8-module integrator (same as `flashpro`) |
+| `jdl swarm` | Run the always-on parallel scanner in the foreground (unattended, no menu) |
+| `jdl supervisor [engine\|swarm]` | Run a target under the auto-restart supervisor (default: engine) |
+| `jdl deploy receiver` | Deploy `NexusFlashReceiver.sol` |
+| `jdl deploy gelato` | Deploy the Gelato relay integration |
+| `jdl status` | One-shot snapshot: daemon liveness, execution count, revenue |
+| `jdl show flashloans [--interval N] [--once]` | Stream live activity/logs (`--once` for a single snapshot) |
+| `jdl integrate [--watch] [--interval N]` | Verify wiring: `.env`, RPC, contract, daemon (`--watch` loops) |
+| `jdl install` | Detect platform, install every dependency (python/node/hardhat/foundry/rust), auto-wire `.env` |
+| `jdl install-swarm-boot` | Install the always-on scanner's boot hook (Termux:Boot, or manual steps elsewhere) |
+| `jdl update [--force]` | `git pull` + reinstall — brings `jdl`/`flashloan`/`flashpro` up to date |
+| `jdl test [system] [--filter STR]` | Run the full test suite (same suites CI runs); `system` also auto-heals `.env` and retries |
+
+### Console scripts (from `pyproject.toml`)
+
+| Command | What it does |
+|---------|--------------|
+| `flashloan` | Interactive terminal engine (scan/exec) |
+| `flashpro` | Advanced 8-module integrator |
+| `jdl` | Unified CLI (table above) |
+
+### `setup.sh` (repo root — Ubuntu/Debian, Termux, UserLAnd)
+
+| Command | What it does |
+|---------|--------------|
+| `bash setup.sh` | Install only |
+| `bash setup.sh run` | Install + launch engine |
+| `bash setup.sh test` | Install + run the 79-test suite |
+| `bash setup.sh termux` | Termux-specific guided install |
+| `bash setup.sh swarm-boot` | Install the always-on parallel-scanner boot hook |
+
+### Python tests (run directly, no `jdl` needed)
+
+| Command | What it does |
+|---------|--------------|
+| `python3 -m jdl_flash.test_flash_engine` | Flash engine suite (79/79) |
+| `python3 -m jdl_flash.test_swarm_runtime` | Swarm runtime suite |
+| `python3 -m jdl_flash.test_bot_swarm` | Bot swarm suite |
+| `python3 -m jdl_flash.test_wallet_lanes` | Wallet-lanes suite |
+| `python3 -m jdl_flash.test_swarm_wiring` | Swarm wiring suite |
+| `python3 -m jdl_flash.test_swarm_daemon` | Swarm daemon suite |
+| `python3 -m jdl_flash.test_config_validation` | Config validation suite |
+| `python3 -m jdl_flash.test_revenue_reconciliation` | Revenue reconciliation suite |
+| `python3 -m jdl_flash.test_env_autowire` | `.env` auto-wire suite |
+| `python3 -m jdl_flash.test_platform_detect` | Platform detection suite |
+| `python3 -m jdl_flash.test_integrate` | `jdl integrate` suite |
+| `python3 -m jdl_flash.test_cli` | `jdl` CLI suite |
+| `python3 python/test_flash_supervisor.py` | Supervisor suite |
+| `python3 python/jdl_native/test_jdl_native.py` | Native (Cython/ctypes) hot-path suite |
+
+### Contracts — Foundry (`contracts/`, `foundry.toml`)
+
+| Command | What it does |
+|---------|--------------|
+| `curl -L https://foundry.paradigm.xyz \| bash && foundryup` | Install Foundry |
+| `forge install foundry-rs/forge-std` | Install the forge-std test lib |
+| `forge test` | Run all tests |
+| `ARB_RPC_URL=... forge test --match-path test/NexusFlashReceiver.t.sol -vv` | Run one file against a live Arbitrum fork, verbose |
+| `forge build` | Compile contracts |
+
+### Contracts — Hardhat (`contracts/package.json`)
+
+| Command | What it does |
+|---------|--------------|
+| `npm run compile` | `hardhat compile` (solc 0.8.20) |
+| `npm test` | `hardhat test` |
+| `npm run test:fork` | Run `test/fork-flash.test.js` against a mainnet fork (7/7) |
+| `npm run deploy:lib:arbitrum` | Deploy `ArbitrageLib` to Arbitrum |
+| `npm run deploy:lib:ethereum` | Deploy `ArbitrageLib` to Ethereum |
+| `npm run deploy:arbitrum` | Deploy the flash receiver to Arbitrum |
+| `npm run deploy:ethereum` | Deploy the flash receiver to Ethereum |
+
+### Node server (`node/package.json`, legacy/optional — skipped on Termux)
+
+| Command | What it does |
+|---------|--------------|
+| `npm start` | Run the Node API/orchestration server (`src/index.js`) |
+| `npm test` | Run the Node test suite (`node --test`) |
+
+### Rust hot-path (`rust/hotpath/`, legacy/optional — skipped on Termux)
+
+| Command | What it does |
+|---------|--------------|
+| `cargo build --release` | Build the `jdl-hotpath` binary + cdylib |
+| `cargo test` | Run the Rust unit tests |
+| `cargo clippy -- -D warnings` | Lint (same gate CI uses) |
+| `cargo run --release` | Run the `jdl-hotpath` CLI binary |
+
+### Utility scripts (`scripts/`)
+
+| Command | What it does |
+|---------|--------------|
+| `bash scripts/deploy_termux.sh` | Universal Termux deployment for the revenue system |
+| `bash scripts/security-audit.sh` | Grep-based scan for hardcoded secrets, disabled CSP, sensitive logs |
+| `bash scripts/start-swarm-daemon.sh` | Foreground launcher for the swarm scanner, under supervision |
+| `bash scripts/termux-boot-swarm.sh` | Termux:Boot entry point that starts the swarm on device boot |
+| `bash scripts/push_revenue_system.sh` | Push revenue-system files to a deployment target |
+| `powershell -File scripts/setup.ps1` | Native Windows dependency installer (used by `jdl install`) |
+
 ## Tests
 
 | Suite | Command | Result |
