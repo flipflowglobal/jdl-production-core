@@ -6,6 +6,8 @@ engine. Every step is copy-paste. No ETH in your wallet is needed to start scann
 
 > Prefer the one-page version? See [`TERMUX.md`](../TERMUX.md). This document is the
 > long-form walkthrough with explanations, verification, and troubleshooting for each step.
+> Want the execution model and the assured-execution verifier? See
+> [`TERMUX_DEEPDIVE.md`](TERMUX_DEEPDIVE.md).
 
 **What you'll end up with:** the `jdl` command on your PATH, a Python virtualenv at
 `~/.flash_venv`, an auto-wired config at `~/jdl/.env`, and the interactive engine

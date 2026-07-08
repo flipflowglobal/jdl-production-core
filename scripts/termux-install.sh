@@ -74,11 +74,28 @@ fi
 step "Running setup.sh (venv, deps, jdl command, .env auto-wire)…"
 bash "$JDL_DIR/setup.sh"
 
-# ── 5. Next steps ────────────────────────────────────────────────────────
+# ── 5. Assured-execution check ───────────────────────────────────────────
+# Don't just claim success — prove the engine can actually run before saying so.
+# termux-verify.sh gates on the install layer (venv, web3 import, jdl on PATH,
+# smoke test). Non-fatal here: a failure prints its own remediation, and the
+# user can re-run `bash scripts/termux-verify.sh --fix` at any time.
+step "Verifying the install can actually execute…"
+VERIFY_RC=0
+bash "$JDL_DIR/scripts/termux-verify.sh" || VERIFY_RC=$?
+
+# ── 6. Next steps ────────────────────────────────────────────────────────
 echo
-echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════╗${RESET}"
-echo -e "${GREEN}${BOLD}║   Termux install complete!                       ║${RESET}"
-echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════╝${RESET}"
+if [ "$VERIFY_RC" -eq 0 ]; then
+    echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════╗${RESET}"
+    echo -e "${GREEN}${BOLD}║   Termux install complete — execution ASSURED.   ║${RESET}"
+    echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════╝${RESET}"
+else
+    echo -e "${YELLOW}${BOLD}╔══════════════════════════════════════════════════╗${RESET}"
+    echo -e "${YELLOW}${BOLD}║   Install ran, but the verifier found issues.    ║${RESET}"
+    echo -e "${YELLOW}${BOLD}║   See the ✗ lines above, or run:                 ║${RESET}"
+    echo -e "${YELLOW}${BOLD}║   bash scripts/termux-verify.sh --fix            ║${RESET}"
+    echo -e "${YELLOW}${BOLD}╚══════════════════════════════════════════════════╝${RESET}"
+fi
 echo
 echo -e "  ${BOLD}Next steps:${RESET}"
 echo -e "  1. ${CYAN}source ~/.flash_venv/bin/activate${RESET}   — activate the venv (once per shell)"
