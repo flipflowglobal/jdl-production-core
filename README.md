@@ -101,7 +101,7 @@ Installed by `pip install -e python/`. Run `jdl --help` or `jdl <command> --help
 | `jdl update [--force]` | `git pull` + reinstall — brings `jdl`/`flashloan`/`flashpro` up to date |
 | `jdl test [system] [--filter STR]` | Run the full test suite (same suites CI runs); `system` also auto-heals `.env` and retries |
 
-### Console scripts (from `pyproject.toml`)
+### Console scripts (from `python/pyproject.toml`)
 
 | Command | What it does |
 |---------|--------------|
