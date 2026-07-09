@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -165,6 +166,7 @@ def autowire(
     if not target.exists():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(template.read_text() if template.is_file() else "")
+    os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — always enforce, even on upgrade
 
     template_keys = list(parse_env_file(template).keys()) if template.is_file() else []
     current = parse_env_file(target)
@@ -219,3 +221,4 @@ def _write_back(target: Path, filled: Dict[str, tuple]) -> None:
         if key not in written:
             out_lines.append(f"{key}={val}")
     target.write_text("\n".join(out_lines) + "\n")
+    os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)  # keep 0o600 after rewrite

@@ -193,6 +193,16 @@ if not WALLET and PRIV_KEY and WEB3_OK:
 
 RPC_USING_KEY = bool((_RPC_URL and 'YOUR_ALCHEMY' not in _RPC_URL and 'YOUR_KEY' not in _RPC_URL) or ALCH_ARB)
 
+def _mask_rpc_url(url: str) -> str:
+    """Return RPC URL with embedded API key replaced by '<first4>***' — safe to print.
+    Covers: Alchemy /v2/<key>, Infura /v3/<key>, and ?apikey=/<key>/?key= query-string styles."""
+    import re
+    # Path-segment keys: /v2/<key> (Alchemy), /v3/<key> (Infura), /v1/<key>, etc.
+    url = re.sub(r'(/v\d+/)(\w{4})\w+', r'\1\2***', url)
+    # Query-string keys: ?apikey=, &apikey=, ?api_key=, &key=, etc.
+    url = re.sub(r'([?&](?:api[-_]?key|key)=)(\w{4})\w+', r'\1\2***', url, flags=re.IGNORECASE)
+    return url
+
 FLASHBOTS_RELAY  = 'https://relay.flashbots.net'
 GELATO_RELAY     = 'https://relay.gelato.digital/relays/v2/call-with-sync-fee'
 MEV_SHARE_URL    = 'https://mev-share.flashbots.net'
@@ -1754,7 +1764,7 @@ def menu_status():
     print(f"  {C.BOLD}Config{C.RESET}")
     print(f"    Wallet:    {C.CYAN}{(WALLET[:16]+'...' if WALLET else 'not set')}{C.RESET}")
     print(f"    Contract:  {C.CYAN}{(CONTRACT[:16]+'...' if CONTRACT else 'not set — scan mode')}{C.RESET}")
-    print(f"    RPC:       {C.DIM}{RPC_ARB}{C.RESET}")
+    print(f"    RPC:       {C.DIM}{_mask_rpc_url(RPC_ARB)}{C.RESET}")
     print(f"    Flashbots: {C.BGREEN if FB_SECRET else C.DIM}{'configured' if FB_SECRET else 'not set'}{C.RESET}")
     print(f"    Web3:      {C.BGREEN if WEB3_OK else C.RED}{'OK (v5 Termux-compat)' if WEB3_OK else 'not installed'}{C.RESET}")
     print(f"    Execution: {(C.BGREEN+'LIVE (broadcasting)') if LIVE_EXEC else (C.YELLOW+'dry-run (set LIVE_EXECUTION=1)')}{C.RESET}")
@@ -1769,7 +1779,7 @@ def menu_config():
     print(f"\n{C.BOLD}{C.CYAN}  ─── CONFIGURATION ───{C.RESET}\n")
     env_path = os.path.expanduser('~/jdl/.env')
     print(f"  .env: {C.BGREEN if os.path.exists(env_path) else C.RED}{env_path}{C.RESET}")
-    print(f"  RPC:  {C.DIM}{RPC_ARB}{C.RESET}\n")
+    print(f"  RPC:  {C.DIM}{_mask_rpc_url(RPC_ARB)}{C.RESET}\n")
     print(_chain_line())
     print()
     fields = [
@@ -2216,7 +2226,7 @@ async def main():
 def menu_connection():
     clear()
     print(f"\n{C.BOLD}{C.CYAN}  ─── ON-CHAIN CONNECTION TEST ───{C.RESET}\n")
-    print(f"  RPC endpoint: {C.CYAN}{RPC_ARB}{C.RESET}")
+    print(f"  RPC endpoint: {C.CYAN}{_mask_rpc_url(RPC_ARB)}{C.RESET}")
     print(f"  {C.DIM}Pinging chain (forcing fresh read)…{C.RESET}\n")
     cs = chain_status(force=True)
     if cs['connected']:
