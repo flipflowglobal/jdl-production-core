@@ -166,7 +166,7 @@ def autowire(
     if not target.exists():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(template.read_text() if template.is_file() else "")
-        os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — private key file
+    os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — always enforce, even on upgrade
 
     template_keys = list(parse_env_file(template).keys()) if template.is_file() else []
     current = parse_env_file(target)

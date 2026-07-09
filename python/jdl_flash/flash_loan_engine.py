@@ -194,10 +194,13 @@ if not WALLET and PRIV_KEY and WEB3_OK:
 RPC_USING_KEY = bool((_RPC_URL and 'YOUR_ALCHEMY' not in _RPC_URL and 'YOUR_KEY' not in _RPC_URL) or ALCH_ARB)
 
 def _mask_rpc_url(url: str) -> str:
-    """Return RPC URL with any embedded API key replaced by '***' — safe to print."""
-    if '/v2/' in url:
-        base, _, key = url.partition('/v2/')
-        return base + '/v2/' + (key[:4] + '***' if len(key) > 4 else '***')
+    """Return RPC URL with embedded API key replaced by '<first4>***' — safe to print.
+    Covers: Alchemy /v2/<key>, Infura /v3/<key>, and ?apikey=/<key>/?key= query-string styles."""
+    import re
+    # Path-segment keys: /v2/<key> (Alchemy), /v3/<key> (Infura), /v1/<key>, etc.
+    url = re.sub(r'(/v\d+/)(\w{4})\w+', r'\1\2***', url)
+    # Query-string keys: ?apikey=, &apikey=, ?api_key=, &key=, etc.
+    url = re.sub(r'([?&](?:api[-_]?key|key)=)(\w{4})\w+', r'\1\2***', url, flags=re.IGNORECASE)
     return url
 
 FLASHBOTS_RELAY  = 'https://relay.flashbots.net'
