@@ -2,7 +2,8 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # run-all-tests.sh — the FULL cross-language test suite, in one command.
 #
-# Mirrors CI (.github/workflows/ci.yml) exactly, running all four jobs locally:
+# Mirrors CI (.github/workflows/ci.yml), running all four jobs locally (plus the
+# optional mainnet-fork tests, which CI doesn't run, when ARB_RPC_URL is set):
 #   • python   — `jdl test`                     (blocking)
 #   • rust     — `cargo test` + `cargo clippy`  (blocking)
 #   • node     — `npm test`                     (blocking)
@@ -153,7 +154,10 @@ echo; echo -e "${CYAN}${BOLD}━━ Summary ━━${RESET}"
 i=0
 while [ "$i" -lt "${#R_NAME[@]}" ]; do
     name="${R_NAME[$i]}"; status="${R_STATUS[$i]}"; blocking="${R_BLOCKING[$i]}"
-    tag=""; [ "$blocking" = "0" ] && tag=" ${DIM}(advisory)${RESET}"
+    # "non-blocking" (not "advisory"): a suite is non-blocking either because it's
+    # intrinsically advisory (solidity, mirrors CI continue-on-error) or because the
+    # user skipped it with --quick (e.g. node) — the tag must fit both cases.
+    tag=""; [ "$blocking" = "0" ] && tag=" ${DIM}(non-blocking)${RESET}"
     case "$status" in
         PASS) echo -e "  ${GREEN}✓ PASS${RESET}  $name$tag" ;;
         FAIL) echo -e "  ${RED}✗ FAIL${RESET}  $name$tag" ;;
