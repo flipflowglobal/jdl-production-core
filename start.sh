@@ -51,8 +51,12 @@ case "$VERB" in
     setup)
         if is_termux; then
             echo -e "${CYAN}${BOLD}Termux detected → scripts/termux-install.sh${RESET}"
+            # Point the installer at THIS clone so it git-pulls/sets up in place
+            # instead of cloning a second copy into ~/projects/… (its default).
+            export JDL_DIR="$REPO_DIR"
             exec bash "$REPO_DIR/scripts/termux-install.sh" "$@"
         else
+            # userland-setup.sh already derives its repo from its own location.
             echo -e "${CYAN}${BOLD}glibc (UserLAnd/Ubuntu/WSL) → scripts/userland-setup.sh${RESET}"
             exec bash "$REPO_DIR/scripts/userland-setup.sh" "$@"
         fi

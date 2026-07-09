@@ -62,7 +62,33 @@ any other tooling is installed directly via pip/cargo/npm/curl.
 
 Arbitrum One (primary). Revenue monitor covers multiple chains.
 
-## Get started — one command from the main directory
+## Get started
+
+### Fresh device — clone, then go
+
+This repo is **private**, so clone it with `git` (which uses your GitHub credentials;
+a plain `curl` of the raw URL returns 404). One line takes you from nothing to running:
+
+**Termux (Android):**
+```bash
+pkg install -y git && \
+git clone https://github.com/flipflowglobal/jdl-production-core.git ~/jdl-production-core && \
+cd ~/jdl-production-core && ./start.sh
+```
+
+**UserLAnd / Ubuntu / WSL:**
+```bash
+sudo apt update && sudo apt install -y git && \
+git clone https://github.com/flipflowglobal/jdl-production-core.git ~/jdl-production-core && \
+cd ~/jdl-production-core && ./start.sh
+```
+
+> `git clone` on a private repo needs GitHub auth on the device — a Personal Access Token
+> (repo scope) at the HTTPS password prompt, `gh auth login`, or an SSH key with the
+> `git@github.com:…` URL. `./start.sh` then does the rest (installs deps in place, wires
+> `.env`, and runs) — it reuses the clone you just made, it won't clone again.
+
+### Already cloned — one command from the main directory
 
 ```bash
 ./start.sh          # detects your platform, sets everything up, and runs
