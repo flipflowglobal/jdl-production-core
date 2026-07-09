@@ -62,6 +62,27 @@ any other tooling is installed directly via pip/cargo/npm/curl.
 
 Arbitrum One (primary). Revenue monitor covers multiple chains.
 
+## Get started — one command from the main directory
+
+```bash
+./start.sh          # detects your platform, sets everything up, and runs
+```
+
+`start.sh` is the single front door. It's a thin, platform-aware dispatcher — it
+detects Termux vs. glibc (UserLAnd/Ubuntu/WSL) and delegates to the right installer,
+with no duplicated logic. Other verbs:
+
+| Command | What it does |
+|---------|--------------|
+| `./start.sh` / `./start.sh setup` | First-run setup for your platform (deps, `.env`, verify) |
+| `./start.sh start` | Launch the interactive engine |
+| `./start.sh test` | Run the test suite (full suite on glibc; Python-only on Termux) |
+| `./start.sh verify` | Prove the install can actually execute |
+| `./start.sh status` | Daemon liveness, executions, revenue |
+| `./start.sh update` | `git pull` + reinstall |
+
+Extra args pass through: `./start.sh setup --no-start`, `./start.sh test --quick`.
+
 ## Quick Start (Termux)
 
 ```bash
