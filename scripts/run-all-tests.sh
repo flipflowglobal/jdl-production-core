@@ -35,7 +35,10 @@ for arg in "$@"; do
     case "$arg" in
         --quick)  QUICK=1 ;;
         --strict) STRICT=1 ;;
-        -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        # Print only the contiguous header comment block: skip the shebang, then
+        # every leading `#` line up to the first non-comment line (stops before
+        # the internal section-divider comments further down).
+        -h|--help) awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
