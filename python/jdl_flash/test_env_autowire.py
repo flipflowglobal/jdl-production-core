@@ -7,6 +7,7 @@ Run: cd python && python3 jdl_flash/test_env_autowire.py
 """
 import os
 import shutil
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -121,6 +122,28 @@ def main():
 
         # ── never invents a value: a key present nowhere never appears ──
         check(all(v != "" for v in final.values()), "no key was ever filled with an empty string")
+
+        # ── set_values: persist explicit user input in place (interactive entry) ──
+        sv_target = tmp / "canonical_sv" / ".env"
+        written = ew.set_values(
+            {"PRIVATE_KEY": "0xfeed", "ALCHEMY_ARB_KEY": "realkey",
+             "FLASH_CONTRACT_ADDRESS": "", "CHAIN_ID": "<placeholder>"},
+            target=sv_target, template=template,
+        )
+        check(set(written) == {"PRIVATE_KEY", "ALCHEMY_ARB_KEY"},
+              "set_values writes only real inputs, skipping blank/placeholder")
+        sv = ew.parse_env_file(sv_target)
+        check(sv.get("PRIVATE_KEY") == "0xfeed" and sv.get("ALCHEMY_ARB_KEY") == "realkey",
+              "set_values persists the entered values")
+        check(sum(1 for l in sv_target.read_text().splitlines() if l.startswith("PRIVATE_KEY=")) == 1,
+              "set_values does not duplicate an existing key line")
+        if os.name == "posix":
+            check(stat.S_IMODE(os.stat(sv_target).st_mode) == 0o600,
+                  "set_values enforces 0600 perms on the env file")
+        # a blank answer must never clobber an already-real value
+        ew.set_values({"PRIVATE_KEY": ""}, target=sv_target, template=template)
+        check(ew.parse_env_file(sv_target).get("PRIVATE_KEY") == "0xfeed",
+              "set_values: a blank answer leaves the existing value intact")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

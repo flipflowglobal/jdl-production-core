@@ -202,6 +202,35 @@ def autowire(
     return {"filled": {k: v[1] for k, v in filled.items()}, "unresolved": remaining}
 
 
+def set_values(
+    values: Dict[str, str],
+    target: Path = CANONICAL_ENV,
+    template: Optional[Path] = None,
+) -> List[str]:
+    """Persist explicit, user-supplied key=value pairs into `target`, in place
+    (existing lines replaced, no duplicates), enforcing 0o600 — the write path
+    behind interactive `.env` entry. Seeds the file from the template if it
+    doesn't exist yet. Blank or placeholder inputs are skipped, so pressing
+    Enter to keep an existing value never clobbers a real one. Returns the
+    sorted list of keys actually written.
+    """
+    template = template or default_template()
+    target = Path(target)
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(template.read_text() if template.is_file() else "")
+    os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — enforce before writing secrets
+
+    to_write = {
+        k: (str(v), "user input")
+        for k, v in values.items()
+        if v is not None and str(v).strip() and not is_placeholder(str(v))
+    }
+    if to_write:
+        _write_back(target, to_write)
+    return sorted(to_write)
+
+
 def _write_back(target: Path, filled: Dict[str, tuple]) -> None:
     lines = target.read_text().splitlines()
     written = set()

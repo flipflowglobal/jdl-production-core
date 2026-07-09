@@ -12,6 +12,33 @@ Python engine runs (Foundry/Rust ship glibc-only binaries — see [`POLYGLOT.md`
 
 ---
 
+## Fastest path — one command (setup → enter .env → start)
+
+`scripts/userland-setup.sh` does everything in one go: installs system packages, runs
+`setup.sh`, **interactively prompts you to type in your `.env` values**, verifies the
+wiring, and starts the engine. This repo is private, so clone first (git uses your
+credentials), then run it in a real terminal (it prompts, so don't pipe it into bash):
+
+```bash
+sudo apt update && sudo apt install -y git && \
+git clone https://github.com/flipflowglobal/jdl-production-core.git ~/jdl-production-core && \
+bash ~/jdl-production-core/scripts/userland-setup.sh
+```
+
+It prompts only for values still missing after the auto-wire — typically **`PRIVATE_KEY`**
+(input hidden) and **`ALCHEMY_ARB_KEY`**; `FLASH_CONTRACT_ADDRESS` is optional (scan-only
+mode runs without it). Entered values are saved to `~/jdl/.env` at `0600` via the engine's
+own writer (in place, no duplicates; pressing Enter keeps an existing value). Then it runs
+`jdl integrate` and launches the engine.
+
+Flags: `--no-apt` (skip the apt step), `--no-start` (set up but don't launch), `-y` (don't
+ask before starting). Private-repo `git clone` needs GitHub auth on the device — a Personal
+Access Token at the HTTPS prompt, `gh auth login`, or an SSH key.
+
+Prefer to understand each step, run the test suite, or do it by hand? Continue below.
+
+---
+
 ## 1. Prepare the UserLAnd session
 
 Install **UserLAnd** from Google Play or F-Droid, create an **Ubuntu** filesystem, and open
