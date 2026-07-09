@@ -73,8 +73,19 @@ if [ -x "$VENV_DIR/bin/jdl" ]; then
 elif command -v jdl >/dev/null 2>&1; then
     if ( cd "$REPO_DIR" && jdl test ); then py_status="PASS"; else py_status="FAIL"; fi
 elif python3 -c 'import jdl_flash' 2>/dev/null; then
-    # `python -m jdl_flash.cli` runs the CLI as __main__ — no console-script needed.
-    if ( cd "$REPO_DIR" && python3 -m jdl_flash.cli test ); then py_status="PASS"; else py_status="FAIL"; fi
+    # Package imports under this python3 but `jdl` isn't on PATH. Don't fall back
+    # to `python -m jdl_flash.cli test`: the suite includes test_cli.py, which
+    # shells out to the literal `jdl` console-script (subprocess.run(["jdl",...])),
+    # so it would fail with the very `jdl: not found` this runner guards against.
+    # Instead put python's scripts dir (where pip installs the `jdl` entry point)
+    # on PATH and run `jdl test`; if the console-script truly isn't installed,
+    # SKIP with guidance rather than reporting a misleading FAIL.
+    PY_SCRIPTS="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))' 2>/dev/null)"
+    if [ -n "$PY_SCRIPTS" ] && [ -x "$PY_SCRIPTS/jdl" ]; then
+        if ( cd "$REPO_DIR" && export PATH="$PY_SCRIPTS:$PATH" && jdl test ); then py_status="PASS"; else py_status="FAIL"; fi
+    else
+        echo -e "  ${YELLOW}jdl_flash imports but the 'jdl' console-script isn't installed — run: pip install -e python/  (or bash setup.sh)${RESET}"
+    fi
 else
     echo -e "  ${YELLOW}jdl not installed — run: bash setup.sh  (or pip install -e python/)${RESET}"
 fi
