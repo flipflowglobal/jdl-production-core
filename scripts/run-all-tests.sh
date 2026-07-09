@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════════════
+# run-all-tests.sh — the FULL cross-language test suite, in one command.
+#
+# Mirrors CI (.github/workflows/ci.yml) exactly, running all four jobs locally:
+#   • python   — `jdl test`                     (blocking)
+#   • rust     — `cargo test` + `cargo clippy`  (blocking)
+#   • node     — `npm test`                     (blocking)
+#   • solidity — Hardhat compile (+ fork tests) (advisory — CI is continue-on-error)
+#
+# Ideal on UserLAnd / Ubuntu / WSL / macOS (glibc), where the whole polyglot
+# stack runs. On Termux (Bionic libc) only the Python suite applies — Rust/Node/
+# Foundry are skipped by design (see POLYGLOT.md), so there this reports the
+# others as SKIP.
+#
+# Usage:
+#   bash scripts/run-all-tests.sh            # run everything, print a summary
+#   bash scripts/run-all-tests.sh --quick    # python + rust only (skip npm-heavy suites)
+#   bash scripts/run-all-tests.sh --strict   # treat SKIP (missing toolchain) as failure
+#
+# Env:
+#   ARB_RPC_URL   if set, also runs the contracts mainnet-fork tests (forge + hardhat)
+#
+# Exit code: 0 if every BLOCKING suite that ran passed; 1 otherwise. Solidity is
+# advisory (mirrors CI's continue-on-error) and never fails the verdict on its own.
+# ═══════════════════════════════════════════════════════════════════════════
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="${REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+VENV_DIR="${VENV_DIR:-$HOME/.flash_venv}"
+
+QUICK=0; STRICT=0
+for arg in "$@"; do
+    case "$arg" in
+        --quick)  QUICK=1 ;;
+        --strict) STRICT=1 ;;
+        -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "unknown option: $arg" >&2; exit 2 ;;
+    esac
+done
+
+GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
+BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
+
+# Parallel arrays of results: name / status (PASS|FAIL|SKIP) / whether blocking.
+declare -a R_NAME R_STATUS R_BLOCKING
+FAILED=0
+
+hdr()    { echo; echo -e "${CYAN}${BOLD}━━ $1 ━━${RESET}"; }
+record() { # name  status  blocking(1/0)
+    R_NAME+=("$1"); R_STATUS+=("$2"); R_BLOCKING+=("$3")
+    if [ "$2" = "FAIL" ] && [ "$3" = "1" ]; then FAILED=$((FAILED+1)); fi
+    if [ "$2" = "SKIP" ] && [ "$3" = "1" ] && [ "$STRICT" = "1" ]; then FAILED=$((FAILED+1)); fi
+}
+
+echo -e "${CYAN}${BOLD}"
+echo "  FULL TEST SUITE — JDL Production Core"
+echo -e "${RESET}${DIM}  repo: $REPO_DIR${RESET}"
+
+# ── 1. Python (blocking) ────────────────────────────────────────────────
+# NB: some suites (test_cli.py) shell out to the bare `jdl` command, so the
+# venv's bin/ must be on PATH — exactly what `source ~/.flash_venv/bin/activate`
+# does. We replicate that here so the run works even without pre-activation.
+hdr "python — jdl test"
+py_status="SKIP"
+if [ -x "$VENV_DIR/bin/jdl" ]; then
+    if ( cd "$REPO_DIR" && export PATH="$VENV_DIR/bin:$PATH" && jdl test ); then py_status="PASS"; else py_status="FAIL"; fi
+elif command -v jdl >/dev/null 2>&1; then
+    if ( cd "$REPO_DIR" && jdl test ); then py_status="PASS"; else py_status="FAIL"; fi
+elif python3 -c 'import jdl_flash' 2>/dev/null; then
+    # `python -m jdl_flash.cli` runs the CLI as __main__ — no console-script needed.
+    if ( cd "$REPO_DIR" && python3 -m jdl_flash.cli test ); then py_status="PASS"; else py_status="FAIL"; fi
+else
+    echo -e "  ${YELLOW}jdl not installed — run: bash setup.sh  (or pip install -e python/)${RESET}"
+fi
+record "python" "$py_status" 1
+
+# ── 2. Rust (blocking) ──────────────────────────────────────────────────
+hdr "rust — cargo test + clippy"
+if command -v cargo >/dev/null 2>&1 && [ -f "$REPO_DIR/rust/hotpath/Cargo.toml" ]; then
+    command -v rustup >/dev/null 2>&1 && rustup component add clippy >/dev/null 2>&1 || true
+    if ( cd "$REPO_DIR/rust/hotpath" && cargo test && cargo clippy --all-targets -- -D warnings ); then
+        record "rust" PASS 1
+    else
+        record "rust" FAIL 1
+    fi
+else
+    echo -e "  ${YELLOW}cargo not found (Termux/no-Rust) — skipping (fallbacks still work, see POLYGLOT.md)${RESET}"
+    record "rust" SKIP 1
+fi
+
+# ── 3. Node (blocking) ──────────────────────────────────────────────────
+if [ "$QUICK" = "1" ]; then
+    hdr "node — SKIPPED (--quick)"
+    record "node" SKIP 0
+elif command -v npm >/dev/null 2>&1 && [ -f "$REPO_DIR/node/package.json" ]; then
+    hdr "node — npm test"
+    if ( cd "$REPO_DIR/node" && { npm ci || npm install; } && npm test ); then
+        record "node" PASS 1
+    else
+        record "node" FAIL 1
+    fi
+else
+    hdr "node — skipped (no npm)"
+    echo -e "  ${YELLOW}npm not found — skipping${RESET}"
+    record "node" SKIP 1
+fi
+
+# ── 4. Solidity (advisory — mirrors CI continue-on-error) ───────────────
+if [ "$QUICK" = "1" ]; then
+    hdr "solidity — SKIPPED (--quick)"
+    record "solidity (compile)" SKIP 0
+elif command -v npm >/dev/null 2>&1 && [ -f "$REPO_DIR/contracts/package.json" ]; then
+    hdr "solidity — Hardhat compile"
+    if ( cd "$REPO_DIR/contracts" && { npm ci || npm install; } && npm run compile ); then
+        record "solidity (compile)" PASS 0
+    else
+        echo -e "  ${YELLOW}compile failed — advisory only (often a network/solc-download hiccup)${RESET}"
+        record "solidity (compile)" FAIL 0
+    fi
+    if [ -n "${ARB_RPC_URL:-}" ]; then
+        hdr "solidity — mainnet-fork tests (ARB_RPC_URL set)"
+        if ( cd "$REPO_DIR/contracts" && npm run test:fork ); then
+            record "solidity (fork)" PASS 0
+        else
+            record "solidity (fork)" FAIL 0
+        fi
+    fi
+else
+    hdr "solidity — skipped (no npm)"
+    record "solidity (compile)" SKIP 0
+fi
+
+# ── Summary ─────────────────────────────────────────────────────────────
+echo; echo -e "${CYAN}${BOLD}━━ Summary ━━${RESET}"
+i=0
+while [ "$i" -lt "${#R_NAME[@]}" ]; do
+    name="${R_NAME[$i]}"; status="${R_STATUS[$i]}"; blocking="${R_BLOCKING[$i]}"
+    tag=""; [ "$blocking" = "0" ] && tag=" ${DIM}(advisory)${RESET}"
+    case "$status" in
+        PASS) echo -e "  ${GREEN}✓ PASS${RESET}  $name$tag" ;;
+        FAIL) echo -e "  ${RED}✗ FAIL${RESET}  $name$tag" ;;
+        SKIP) echo -e "  ${YELLOW}○ SKIP${RESET}  $name$tag" ;;
+    esac
+    i=$((i+1))
+done
+
+echo
+if [ "$FAILED" -eq 0 ]; then
+    echo -e "${GREEN}${BOLD}  ✓ FULL SUITE GREEN — every blocking suite that ran passed.${RESET}"
+    exit 0
+fi
+echo -e "${RED}${BOLD}  ✗ $FAILED blocking suite(s) failed$([ "$STRICT" = "1" ] && echo " (or skipped, under --strict)").${RESET}"
+exit 1
