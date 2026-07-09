@@ -180,6 +180,7 @@ Installed by `pip install -e python/`. Run `jdl --help` or `jdl <command> --help
 
 | Command | What it does |
 |---------|--------------|
+| `bash scripts/userland-setup.sh` | UserLAnd/glibc one command: setup → **interactive `.env` entry** → verify → start (`--no-apt`, `--no-start`, `-y`) |
 | `bash scripts/run-all-tests.sh` | Full cross-language test suite (python + rust + node + solidity), mirroring CI (`--quick`, `--strict`) |
 | `bash scripts/termux-install.sh` | One-command Termux install: packages → clone → setup → verify (bootstrap via `git clone`, since this repo is private) |
 | `bash scripts/termux-verify.sh` | Assured-execution doctor: proves the engine can run (`--fix`, `--run`, `--quick`) |
