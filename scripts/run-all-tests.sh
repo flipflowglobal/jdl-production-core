@@ -141,23 +141,28 @@ elif command -v npm >/dev/null 2>&1 && [ -f "$REPO_DIR/contracts/package.json" ]
         else
             record "solidity (hardhat fork)" FAIL 0
         fi
-        # Foundry fork suite too, if forge is installed (advisory). foundry.toml
-        # reads ARB_RPC_URL from the environment for the fork.
-        if command -v forge >/dev/null 2>&1; then
-            hdr "solidity — Foundry (forge) mainnet-fork tests"
-            if ( cd "$REPO_DIR/contracts" && forge test ); then
-                record "solidity (forge fork)" PASS 0
-            else
-                record "solidity (forge fork)" FAIL 0
-            fi
-        else
-            echo -e "  ${YELLOW}forge not installed — skipping the Foundry fork suite${RESET}"
-            record "solidity (forge fork)" SKIP 0
-        fi
     fi
 else
-    hdr "solidity — skipped (no npm)"
+    hdr "solidity — Hardhat skipped (no npm)"
     record "solidity (compile)" SKIP 0
+fi
+
+# ── 4b. Foundry (forge) mainnet-fork tests — independent of npm/Hardhat ──
+# forge test doesn't need npm, so gate it only on ARB_RPC_URL + forge (advisory).
+# This runs even on a machine that has Foundry but no npm. foundry.toml reads
+# ARB_RPC_URL from the environment for the fork.
+if [ "$QUICK" != "1" ] && [ -n "${ARB_RPC_URL:-}" ]; then
+    hdr "solidity — Foundry (forge) mainnet-fork tests"
+    if command -v forge >/dev/null 2>&1 && [ -f "$REPO_DIR/contracts/foundry.toml" ]; then
+        if ( cd "$REPO_DIR/contracts" && forge test ); then
+            record "solidity (forge fork)" PASS 0
+        else
+            record "solidity (forge fork)" FAIL 0
+        fi
+    else
+        echo -e "  ${YELLOW}forge not installed — skipping the Foundry fork suite${RESET}"
+        record "solidity (forge fork)" SKIP 0
+    fi
 fi
 
 # ── Summary ─────────────────────────────────────────────────────────────
