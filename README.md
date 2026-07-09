@@ -76,7 +76,7 @@ cd contracts && forge install foundry-rs/forge-std
 ARB_RPC_URL=https://arb1.arbitrum.io/rpc forge test --match-path test/NexusFlashReceiver.t.sol -vv
 ```
 
-Full guides: [`README_FLASH.md`](README_FLASH.md) · [`TERMUX.md`](TERMUX.md) · [`docs/TERMUX_WALKTHROUGH.md`](docs/TERMUX_WALKTHROUGH.md) · [`docs/TERMUX_DEEPDIVE.md`](docs/TERMUX_DEEPDIVE.md) · [`contracts/README.md`](contracts/README.md)
+Full guides: [`README_FLASH.md`](README_FLASH.md) · [`TERMUX.md`](TERMUX.md) · [`docs/TERMUX_WALKTHROUGH.md`](docs/TERMUX_WALKTHROUGH.md) · [`docs/TERMUX_DEEPDIVE.md`](docs/TERMUX_DEEPDIVE.md) · [`docs/USERLAND.md`](docs/USERLAND.md) · [`contracts/README.md`](contracts/README.md)
 
 ## CLI Command Reference
 
@@ -180,6 +180,7 @@ Installed by `pip install -e python/`. Run `jdl --help` or `jdl <command> --help
 
 | Command | What it does |
 |---------|--------------|
+| `bash scripts/run-all-tests.sh` | Full cross-language test suite (python + rust + node + solidity), mirroring CI (`--quick`, `--strict`) |
 | `bash scripts/termux-install.sh` | One-command Termux install: packages → clone → setup → verify (bootstrap via `git clone`, since this repo is private) |
 | `bash scripts/termux-verify.sh` | Assured-execution doctor: proves the engine can run (`--fix`, `--run`, `--quick`) |
 | `bash scripts/deploy_termux.sh` | Universal Termux deployment for the revenue system |
@@ -193,10 +194,15 @@ Installed by `pip install -e python/`. Run `jdl --help` or `jdl <command> --help
 
 | Suite | Command | Result |
 |-------|---------|--------|
+| **Full suite (all languages, mirrors CI)** | `bash scripts/run-all-tests.sh` | python + rust + node + solidity |
 | Python engine | `python3 -m jdl_flash.test_flash_engine` | 79/79 |
 | Python (everything — same as CI) | `jdl test` | all suites |
 | Contracts (Foundry) | `forge test` | 7/7 fork |
 | Contracts (Hardhat) | `npm run test:fork` | 7/7 fork |
+
+On glibc platforms (UserLAnd / Ubuntu / WSL / macOS) `scripts/run-all-tests.sh` runs every
+suite in one shot — see [`docs/USERLAND.md`](docs/USERLAND.md). On Termux only the Python
+suite applies (Rust/Node/Foundry are skipped by design).
 
 ## License
 
