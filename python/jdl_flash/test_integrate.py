@@ -104,16 +104,17 @@ def main():
         ok, detail = ig.check_rpc_endpoints(env_shadow)
         check(ok is True and "public node only" in detail,
               "check_rpc_endpoints: placeholder RPC_URL shadows real ARB_RPC_URL (matches engine _env)")
-        # (b) the engine builds a URL for EVERY non-empty ALCHEMY_KEY_* (no
-        #     placeholder filtering), so integrate counts it too. ──
+        # (b) a placeholder ALCHEMY_KEY_* (YOUR_ALCHEMY_KEY_HERE) can only 401, so
+        #     it is validity-filtered like an explicit URL and does NOT count as a
+        #     real source — the redundancy report reflects usable endpoints only. ──
         env_alch_ph = tmp / "alch_ph.env"
         env_alch_ph.write_text(
             "PRIVATE_KEY=0xabc\n"
-            "ALCHEMY_KEY_2=YOUR_ALCHEMY_KEY_HERE\n"   # non-empty -> engine uses it -> counts
+            "ALCHEMY_KEY_2=YOUR_ALCHEMY_KEY_HERE\n"   # placeholder -> filtered
         )
         ok, detail = ig.check_rpc_endpoints(env_alch_ph)
-        check(ok is True and "2 endpoints" in detail and "1 of yours" in detail,
-              "check_rpc_endpoints: non-empty ALCHEMY_KEY_* counts, matching the engine")
+        check(ok is True and "public node only" in detail,
+              "check_rpc_endpoints: placeholder ALCHEMY_KEY_* is filtered (not counted)")
 
         # ── de-dup: duplicate URLs and the public fallback must NOT overstate
         # redundancy (mirrors the engine's own de-duplication) ──
@@ -140,14 +141,16 @@ def main():
         check(ok is True and "2 endpoints" in detail and "1 of yours" in detail,
               "check_rpc_endpoints: alias group counts once (ARB_RPC_URL not double-counted)")
 
-        # ── _resolve_rpc_url: pure priority logic, no network ──
-        check(ig._resolve_rpc_url({"ALCHEMY_ARB_KEY": "abc", "RPC_URL": "https://example.com"})
-              == "https://arb-mainnet.g.alchemy.com/v2/abc",
-              "_resolve_rpc_url: prefers ALCHEMY_ARB_KEY over RPC_URL, same as the engine")
-        check(ig._resolve_rpc_url({"RPC_URL": "https://example.com/rpc"}) == "https://example.com/rpc",
-              "_resolve_rpc_url: falls back to RPC_URL when no Alchemy key")
-        check(ig._resolve_rpc_url({"RPC_URL": "https://x/v2/YOUR_ALCHEMY_KEY_HERE"}) is None,
-              "_resolve_rpc_url: template-default RPC_URL with nothing else -> None")
+        # ── check_required_keys: a SECONDARY-only source satisfies the RPC
+        # requirement (RPC_URL2-only / ALCHEMY_KEY_2-only), matching the engine ──
+        env_secondary = tmp / "secondary.env"
+        env_secondary.write_text("PRIVATE_KEY=0xabc\nRPC_URL2=https://my.secondary/rpc\n")
+        ok, _ = ig.check_required_keys(env_secondary)
+        check(ok is True, "check_required_keys: RPC_URL2-only satisfies the RPC requirement")
+        env_alch2 = tmp / "alch2.env"
+        env_alch2.write_text("PRIVATE_KEY=0xabc\nALCHEMY_KEY_2=realkey\n")
+        ok, _ = ig.check_required_keys(env_alch2)
+        check(ok is True, "check_required_keys: ALCHEMY_KEY_2-only satisfies the RPC requirement")
 
         # ── check_contract_address ──
         env_zero = tmp / "zero.env"
@@ -168,16 +171,38 @@ def main():
         check(ok is True, "check_contract_address: well-formed address -> ok")
         check(detail == "0x1234567890123456789012345678901234567890", "check_contract_address: detail echoes the address")
 
-        # ── check_rpc_reachable ──
-        env_no_rpc = tmp / "no_rpc.env"
-        env_no_rpc.write_text("RPC_URL=\n")
-        ok, detail = ig.check_rpc_reachable(env_no_rpc)
-        check(ok is False, "check_rpc_reachable: no RPC_URL -> not ok, no network call attempted")
+        # ── check_rpc_reachable: probes the engine's endpoint list in order and
+        # succeeds on the first Arbitrum responder (get_w3 failover). Probe is
+        # monkeypatched so these are deterministic and never hit the network. ──
+        real_probe = ig._probe_chain_id
+        try:
+            env_two = tmp / "two.env"          # -> [user rpc, public]
+            env_two.write_text("PRIVATE_KEY=0xabc\nRPC_URL=https://user.rpc/x\n")
 
-        env_bad_rpc = tmp / "bad_rpc.env"
-        env_bad_rpc.write_text("RPC_URL=http://127.0.0.1:1/\n")
-        ok, detail = ig.check_rpc_reachable(env_bad_rpc, timeout=1.0)
-        check(ok is False, "check_rpc_reachable: unreachable endpoint -> not ok, doesn't raise")
+            # primary healthy -> ok via endpoint #1 (public never probed)
+            ig._probe_chain_id = lambda url, timeout: 42161
+            ok, detail = ig.check_rpc_reachable(env_two)
+            check(ok is True and "endpoint #1" in detail, "check_rpc_reachable: healthy primary -> ok")
+
+            # dead primary, healthy public fallback -> engine succeeds, so do we
+            def _primary_dead(url, timeout):
+                if url == "https://user.rpc/x":
+                    raise OSError("connection refused")
+                return 42161
+            ig._probe_chain_id = _primary_dead
+            ok, detail = ig.check_rpc_reachable(env_two)
+            check(ok is True and "public fallback" in detail,
+                  "check_rpc_reachable: dead primary + healthy fallback -> reachable (matches engine)")
+
+            # everything dead -> not ok, doesn't raise
+            def _all_dead(url, timeout):
+                raise OSError("connection refused")
+            ig._probe_chain_id = _all_dead
+            ok, detail = ig.check_rpc_reachable(env_two)
+            check(ok is False and "no endpoint reachable" in detail,
+                  "check_rpc_reachable: all endpoints dead -> not ok")
+        finally:
+            ig._probe_chain_id = real_probe
 
         # ── check_daemon_liveness: never raises, always returns a 2-tuple ──
         ok, detail = ig.check_daemon_liveness()

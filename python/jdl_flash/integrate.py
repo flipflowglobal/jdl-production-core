@@ -12,7 +12,7 @@ import json
 import re
 import urllib.request
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Tuple
 
 from jdl_flash._paths import load_flash_supervisor
 from jdl_flash.env_autowire import CANONICAL_ENV, is_placeholder, parse_env_file
@@ -27,19 +27,22 @@ def check_env_file(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
     return True, str(env_path)
 
 
-def _has_rpc_source(values: dict) -> bool:
-    # Mirrors flash_loan_engine.py's _build_rpc_endpoints(): RPC_URL is not the
-    # only valid source — ALCHEMY_ARB_KEY (the key env_autowire actually fills,
-    # since .env.template's RPC_URL default isn't a placeholder by itself) is
-    # just as good, and the engine prefers it first.
-    return not is_placeholder(values.get("RPC_URL", "")) or not is_placeholder(values.get("ALCHEMY_ARB_KEY", ""))
+def _own_endpoint_count(values: dict) -> int:
+    """How many of the user's OWN Arbitrum RPC endpoints the engine would build
+    (the deduped list minus the always-appended public node). Uses the engine's
+    canonicalizer, so RPC_URL2 / ALCHEMY_KEY_* count exactly as the engine sees
+    them — not just RPC_URL / ALCHEMY_ARB_KEY."""
+    from jdl_flash.rpc_endpoints import build_rpc_endpoints
+
+    return len(build_rpc_endpoints(values)) - 1
 
 
 def check_required_keys(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
     values = parse_env_file(env_path)
     unresolved = [k for k in ("PRIVATE_KEY",) if is_placeholder(values.get(k, ""))]
-    if not _has_rpc_source(values):
-        unresolved.append("RPC_URL or ALCHEMY_ARB_KEY")
+    if _own_endpoint_count(values) <= 0:
+        # Any real source counts: RPC_URL, ALCHEMY_ARB_KEY, RPC_URLn, ALCHEMY_KEY_*.
+        unresolved.append("an RPC source (RPC_URL / ALCHEMY_ARB_KEY / RPC_URLn / ALCHEMY_KEY_*)")
     if unresolved:
         return False, f"still unset: {', '.join(unresolved)} — run `jdl install` to auto-wire, or set by hand"
     return True, "PRIVATE_KEY and an RPC source are set"
@@ -55,34 +58,39 @@ def check_contract_address(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
     return True, addr
 
 
-def _resolve_rpc_url(values: dict) -> Optional[str]:
-    # Same priority order as flash_loan_engine.py's _build_rpc_endpoints():
-    # Alchemy key first, then RPC_URL.
-    alch_arb = values.get("ALCHEMY_ARB_KEY", "")
-    if not is_placeholder(alch_arb):
-        return f"https://arb-mainnet.g.alchemy.com/v2/{alch_arb}"
-    rpc_url = values.get("RPC_URL", "")
-    if not is_placeholder(rpc_url):
-        return rpc_url
-    return None
+_ARBITRUM_CHAIN_ID = 42161
+
+
+def _probe_chain_id(url: str, timeout: float) -> int:
+    """POST eth_chainId to `url` and return the decoded chain id, or raise. Module
+    level so tests can monkeypatch it instead of hitting the network."""
+    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": []}).encode()
+    req = urllib.request.Request(
+        url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — endpoints are user-configured, trusted
+        return int(json.loads(resp.read())["result"], 16)
 
 
 def check_rpc_reachable(env_path: Path = CANONICAL_ENV, timeout: float = 4.0) -> Tuple[bool, str]:
-    values = parse_env_file(env_path)
-    rpc_url = _resolve_rpc_url(values)
-    if rpc_url is None:
-        return False, "RPC_URL or ALCHEMY_ARB_KEY not set"
-    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": []}).encode()
-    req = urllib.request.Request(
-        rpc_url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — RPC_URL is user-configured, trusted
-            body = json.loads(resp.read())
-        chain_id = int(body["result"], 16)
-        return True, f"chain id {chain_id}"
-    except Exception as exc:  # noqa: BLE001 — best-effort reachability probe, any failure just means "unreachable"
-        return False, f"unreachable ({exc})"
+    """Probe the engine's endpoint list in order (get_w3() failover), reporting
+    reachable if ANY responds on Arbitrum — so a dead primary with a healthy
+    fallback reads as reachable, exactly like the running engine."""
+    from jdl_flash.rpc_endpoints import build_rpc_endpoints, PUBLIC_ARB_RPC
+
+    endpoints = build_rpc_endpoints(parse_env_file(env_path))
+    last_err: object = "none tried"
+    for i, url in enumerate(endpoints, 1):
+        try:
+            chain = _probe_chain_id(url, timeout)
+        except Exception as exc:  # noqa: BLE001 — any failure just means "try the next endpoint"
+            last_err = exc
+            continue
+        if chain == _ARBITRUM_CHAIN_ID:
+            where = "public fallback" if url == PUBLIC_ARB_RPC else f"endpoint #{i}/{len(endpoints)}"
+            return True, f"chain {chain} via {where}"
+        last_err = f"wrong chain {chain}"
+    return False, f"no endpoint reachable ({len(endpoints)} tried; last: {last_err})"
 
 
 def check_rpc_endpoints(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
