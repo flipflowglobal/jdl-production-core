@@ -13,7 +13,7 @@
 # authored by "actions/" are used (checkout, setup-python, setup-node,
 # cache, upload-artifact, download-artifact, github-script). No
 # marketplace create-release / upload-release-asset actions — the release
-# itself is created via actions/github-script@v7 calling the GitHub REST
+# itself is created via actions/github-script@v9 calling the GitHub REST
 # API (octokit) directly.
 # -----------------------------------------------------------------------
 
@@ -166,7 +166,7 @@ jobs:
       # access to, and makes no calls toward, any blockchain network or
       # the live bot's runtime.
       - name: Create GitHub Release and upload assets
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
