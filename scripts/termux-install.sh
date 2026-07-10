@@ -42,6 +42,15 @@ ok()   { echo -e "${GREEN}✓ $1${RESET}"; }
 warn() { echo -e "${YELLOW}⚠ $1${RESET}"; }
 fail() { echo -e "${RED}✗ $1${RESET}"; exit 1; }
 
+# Termux from its RUNTIME env, not the /data/data/com.termux dir (a co-installed
+# UserLAnd can see that host dir and would otherwise wrongly pass this guard).
+is_termux() {
+    [ -n "${TERMUX_VERSION:-}" ] && return 0
+    case "${PREFIX:-}" in *com.termux*) return 0 ;; esac
+    case "$(command -v pkg 2>/dev/null)" in */com.termux/*) return 0 ;; esac
+    return 1
+}
+
 echo -e "${CYAN}${BOLD}"
 cat << 'BANNER'
   JDL FLASH ENGINE · ONE-COMMAND TERMUX INSTALL
@@ -49,10 +58,10 @@ BANNER
 echo -e "${RESET}"
 
 # ── 1. Verify Termux ─────────────────────────────────────────────────────
-if [ -z "${TERMUX_VERSION:-}" ] && [ ! -d "/data/data/com.termux" ]; then
+if ! is_termux; then
     warn "This doesn't look like Termux."
-    echo -e "  ${DIM}This one-liner targets Termux on Android. On Ubuntu/WSL/macOS,"
-    echo -e "  clone the repo and run 'bash setup.sh' directly instead.${RESET}"
+    echo -e "  ${DIM}This installer targets Termux on Android. On UserLAnd/Ubuntu/WSL/macOS,"
+    echo -e "  run 'bash scripts/userland-setup.sh' (or 'bash setup.sh') instead.${RESET}"
     fail "Not running under Termux — aborting."
 fi
 ok "Termux detected"

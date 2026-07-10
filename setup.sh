@@ -46,9 +46,20 @@ fail()  { echo -e "${RED}✗ $1${RESET}"; exit 1; }
 info()  { echo -e "${DIM}  $1${RESET}"; }
 
 # ── Detect environment ───────────────────────────────────────
+# Termux is detected by its RUNTIME env (TERMUX_VERSION/PREFIX/pkg), NOT by the
+# /data/data/com.termux directory: a co-installed UserLAnd (proot Ubuntu on the
+# same device) can see that host dir and would otherwise be misdetected as
+# Termux — then fail on `pkg: command not found`. /proc/version says "android"
+# on both, so it only distinguishes UserLAnd once Termux is ruled out.
+is_termux() {
+    [ -n "${TERMUX_VERSION:-}" ] && return 0
+    case "${PREFIX:-}" in *com.termux*) return 0 ;; esac
+    case "$(command -v pkg 2>/dev/null)" in */com.termux/*) return 0 ;; esac
+    return 1
+}
 IS_TERMUX=0
 IS_USERLAND=0
-if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; then
+if is_termux; then
     IS_TERMUX=1
 elif grep -qi 'userland\|android' /proc/version 2>/dev/null; then
     IS_USERLAND=1

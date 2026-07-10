@@ -31,7 +31,15 @@ BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
 warn() { echo -e "${YELLOW}⚠ $1${RESET}"; }
 fail() { echo -e "${RED}✗ $1${RESET}"; exit 1; }
 
-is_termux() { [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux" ]; }
+# Detect Termux by its RUNTIME env, not the /data/data/com.termux directory —
+# a co-installed UserLAnd (proot Ubuntu) can see that host dir and would be
+# misdetected as Termux, then die on `pkg: command not found`.
+is_termux() {
+    [ -n "${TERMUX_VERSION:-}" ] && return 0
+    case "${PREFIX:-}" in *com.termux*) return 0 ;; esac
+    case "$(command -v pkg 2>/dev/null)" in */com.termux/*) return 0 ;; esac
+    return 1
+}
 
 usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; }
 
