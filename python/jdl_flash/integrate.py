@@ -58,7 +58,16 @@ def check_contract_address(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
     return True, addr
 
 
-_ARBITRUM_CHAIN_ID = 42161
+_DEFAULT_CHAIN_ID = 42161  # Arbitrum One; overridden by CHAIN_ID (e.g. 421614 Sepolia)
+
+
+def _expected_chain_id(values: dict) -> int:
+    """The chain the engine expects — CHAIN_ID from the same .env, so a Sepolia
+    (421614) config isn't reported as 'wrong chain'. Falls back to Arbitrum One."""
+    try:
+        return int((values.get("CHAIN_ID", "") or "").strip() or _DEFAULT_CHAIN_ID)
+    except ValueError:
+        return _DEFAULT_CHAIN_ID
 
 
 def _probe_chain_id(url: str, timeout: float) -> int:
@@ -74,11 +83,13 @@ def _probe_chain_id(url: str, timeout: float) -> int:
 
 def check_rpc_reachable(env_path: Path = CANONICAL_ENV, timeout: float = 4.0) -> Tuple[bool, str]:
     """Probe the engine's endpoint list in order (get_w3() failover), reporting
-    reachable if ANY responds on Arbitrum — so a dead primary with a healthy
-    fallback reads as reachable, exactly like the running engine."""
+    reachable if ANY responds on the CONFIGURED chain — so a dead primary with a
+    healthy fallback reads as reachable, exactly like the running engine."""
     from jdl_flash.rpc_endpoints import build_rpc_endpoints, PUBLIC_ARB_RPC
 
-    endpoints = build_rpc_endpoints(parse_env_file(env_path))
+    values = parse_env_file(env_path)
+    expected = _expected_chain_id(values)
+    endpoints = build_rpc_endpoints(values)
     last_err: object = "none tried"
     for i, url in enumerate(endpoints, 1):
         try:
@@ -86,10 +97,10 @@ def check_rpc_reachable(env_path: Path = CANONICAL_ENV, timeout: float = 4.0) ->
         except Exception as exc:  # noqa: BLE001 — any failure just means "try the next endpoint"
             last_err = exc
             continue
-        if chain == _ARBITRUM_CHAIN_ID:
+        if chain == expected:
             where = "public fallback" if url == PUBLIC_ARB_RPC else f"endpoint #{i}/{len(endpoints)}"
             return True, f"chain {chain} via {where}"
-        last_err = f"wrong chain {chain}"
+        last_err = f"wrong chain {chain} (expected {expected})"
     return False, f"no endpoint reachable ({len(endpoints)} tried; last: {last_err})"
 
 
