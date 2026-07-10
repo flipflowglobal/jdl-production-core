@@ -64,10 +64,8 @@ _DEFAULT_CHAIN_ID = 42161  # Arbitrum One; overridden by CHAIN_ID (e.g. 421614 S
 def _expected_chain_id(values: dict) -> int:
     """The chain the engine expects — CHAIN_ID from the same .env, so a Sepolia
     (421614) config isn't reported as 'wrong chain'. Falls back to Arbitrum One."""
-    try:
-        return int((values.get("CHAIN_ID", "") or "").strip() or _DEFAULT_CHAIN_ID)
-    except ValueError:
-        return _DEFAULT_CHAIN_ID
+    raw = (values.get("CHAIN_ID", "") or "").strip()
+    return int(raw) if raw else _DEFAULT_CHAIN_ID
 
 
 def _probe_chain_id(url: str, timeout: float) -> int:
