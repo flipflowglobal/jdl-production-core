@@ -92,6 +92,31 @@ def main():
         check(ok is True and "7 endpoints" in detail and "6 of yours" in detail,
               "check_rpc_endpoints: counts multiple Alchemy keys + RPC URLs + fallbacks, skips placeholders")
 
+        # ── de-dup: duplicate URLs and the public fallback must NOT overstate
+        # redundancy (mirrors the engine's own de-duplication) ──
+        env_dup = tmp / "dup.env"
+        env_dup.write_text(
+            "PRIVATE_KEY=0xabc\n"
+            "RPC_URL=https://dup.rpc/x\n"
+            "RPC_URL2=https://dup.rpc/x\n"                 # exact duplicate of RPC_URL
+            "RPC_URL3=https://arb1.arbitrum.io/rpc\n"      # equals the public fallback
+        )
+        ok, detail = ig.check_rpc_endpoints(env_dup)
+        check(ok is True and "2 endpoints" in detail and "1 of yours" in detail,
+              "check_rpc_endpoints: de-dupes duplicate URLs and the public node (no overstated redundancy)")
+
+        # ── alias precedence: RPC_URL wins its group; ARB_RPC_URL alias is not
+        # counted as a second endpoint (matches the engine's _env) ──
+        env_alias = tmp / "alias.env"
+        env_alias.write_text(
+            "PRIVATE_KEY=0xabc\n"
+            "RPC_URL=https://primary.rpc/a\n"
+            "ARB_RPC_URL=https://ignored-alias.rpc/b\n"
+        )
+        ok, detail = ig.check_rpc_endpoints(env_alias)
+        check(ok is True and "2 endpoints" in detail and "1 of yours" in detail,
+              "check_rpc_endpoints: alias group counts once (ARB_RPC_URL not double-counted)")
+
         # ── _resolve_rpc_url: pure priority logic, no network ──
         check(ig._resolve_rpc_url({"ALCHEMY_ARB_KEY": "abc", "RPC_URL": "https://example.com"})
               == "https://arb-mainnet.g.alchemy.com/v2/abc",

@@ -145,25 +145,48 @@ PY
     # The engine reads any number of ALCHEMY_KEY_* and numbered RPC_URLn and
     # tries each in turn (get_w3()), so one provider rate-limiting never takes
     # the bot offline. Collect them as KEY=VALUE lines for one write.
-    ENTRIES=""
-    add_entry() { [ -n "$2" ] && ENTRIES="${ENTRIES}${1}=${2}
-"; }
+    #
+    # Slot allocation is re-run safe: a slot is "taken" if it's already real in
+    # ~/jdl/.env OR already chosen this run, and we always pick the next FREE
+    # index — so re-running adds redundancy instead of overwriting existing keys.
+    ENTRIES=""; PENDING=" "
+    add_entry() {   # KEY VALUE
+        [ -n "$2" ] || return 0
+        ENTRIES="${ENTRIES}${1}=${2}
+"
+        PENDING="${PENDING}${1} "
+    }
+    slot_taken() {  # KEY -> 0 if already real on disk or pending this run
+        case "$PENDING" in *" $1 "*) return 0 ;; esac
+        [ "$(status_of "$1")" = "SET" ]
+    }
+    next_free() {   # PREFIX START -> first index whose PREFIX<idx> is free
+        local prefix="$1" i="$2"
+        while slot_taken "${prefix}${i}"; do i=$((i + 1)); done
+        echo "$i"
+    }
     add_entry PRIVATE_KEY "$IN_PK"
     add_entry ALCHEMY_ARB_KEY "$IN_ALCH"
     add_entry FLASH_CONTRACT_ADDRESS "$IN_FCA"
 
     echo -e "\n  ${DIM}Add more Alchemy keys / RPC URLs for failover (recommended). Enter to stop.${RESET}"
-    n=2
     while : ; do
-        printf "  Additional Alchemy key #%s (Enter to stop): " "$n"; read -r extra_k
+        printf "  Additional Alchemy key (Enter to stop): "; read -r extra_k
         [ -z "$extra_k" ] && break
-        add_entry "ALCHEMY_KEY_$n" "$extra_k"; n=$((n+1))
+        add_entry "ALCHEMY_KEY_$(next_free ALCHEMY_KEY_ 2)" "$extra_k"
     done
-    m=2
     while : ; do
-        printf "  Additional RPC URL #%s (full https://… , Enter to stop): " "$m"; read -r extra_u
+        printf "  Additional RPC URL (full https://… , Enter to stop): "; read -r extra_u
         [ -z "$extra_u" ] && break
-        add_entry "RPC_URL$m" "$extra_u"; m=$((m+1))
+        if slot_taken RPC_URL; then
+            # RPC_URL already has a real value (or was set this run) — use the
+            # next free numbered slot.
+            add_entry "RPC_URL$(next_free RPC_URL 2)" "$extra_u"
+        else
+            # RPC_URL is still the template placeholder: put the first URL there
+            # so the required-keys / reachability checks recognize it as primary.
+            add_entry RPC_URL "$extra_u"
+        fi
     done
 
     # Persist through the engine's own writer (in-place, 0600, skips blanks).
