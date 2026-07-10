@@ -13,8 +13,10 @@ The rules are the engine's long-standing behavior — reproduced here verbatim:
   • Explicit/numbered RPC URLs must pass `is_valid_rpc` (rejects the YOUR_ALCHEMY
     /YOUR_KEY placeholders and URLs containing spaces).
   • ALCHEMY_ARB_KEY / ALCHEMY_ARBITRUM_KEY (first non-empty) plus EVERY non-empty
-    ALCHEMY_KEY_* are turned into arb-mainnet URLs (Alchemy keys are not
-    placeholder-filtered — any non-empty value is used, matching the engine).
+    ALCHEMY_KEY_* are turned into arb-mainnet URLs, then run through the SAME
+    `is_valid_rpc` filter as explicit URLs — so a placeholder key like
+    YOUR_ALCHEMY_KEY_HERE (which would only 401) is dropped and never counted as
+    a real source.
   • A public Arbitrum node is always appended last, and the whole list is
     de-duplicated preserving order.
 """
@@ -47,13 +49,19 @@ def build_rpc_endpoints(env: Mapping[str, str]) -> List[str]:
     """The de-duplicated Arbitrum RPC URL list, in the order the engine tries
     them. Pass os.environ (engine) or a parsed .env dict (integrate)."""
     eps: List[str] = []
-    # 1) Alchemy — dedicated key group first, then every non-empty ALCHEMY_KEY_*.
+    # 1) Alchemy — dedicated key group first, then every ALCHEMY_KEY_*. Build the
+    #    URL and keep it only if valid, so a placeholder key (YOUR_ALCHEMY_KEY_HERE)
+    #    — which would only 401 — is dropped, not counted as a real source.
     alch = _env_first(env, "ALCHEMY_ARB_KEY", "ALCHEMY_ARBITRUM_KEY")
     if alch:
-        eps.append(ALCHEMY_ARB_URL.format(alch))
+        url = ALCHEMY_ARB_URL.format(alch)
+        if is_valid_rpc(url):
+            eps.append(url)
     for name, val in env.items():
         if name.startswith("ALCHEMY_KEY_") and val and val.strip():
-            eps.append(ALCHEMY_ARB_URL.format(val.strip()))
+            url = ALCHEMY_ARB_URL.format(val.strip())
+            if is_valid_rpc(url):
+                eps.append(url)
     # 2) Explicit URL group (first non-empty alias, then validated), then RPC_URLn.
     rpc = _env_first(env, "RPC_URL", "ARBITRUM_RPC_URL", "ARB_RPC_URL")
     if is_valid_rpc(rpc):
