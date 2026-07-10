@@ -43,7 +43,7 @@ jobs:
       # rustup is preinstalled on ubuntu-latest runners; no third-party
       # toolchain action needed (same reasoning as ci.yml's rust job).
       - name: Cache cargo dependencies and build output
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
