@@ -85,12 +85,35 @@ def main():
             "RPC_URL=https://my.rpc/one\n"
             "RPC_URL2=https://my.rpc/two\n"
             "RPC_FALLBACKS=https://fb.rpc/a,https://fb.rpc/b\n"
-            "ALCHEMY_KEY_BAD=YOUR_ALCHEMY_KEY_HERE\n"   # placeholder must NOT count
         )
         ok, detail = ig.check_rpc_endpoints(env_multi)
         # 2 alchemy + 2 rpc urls + 2 fallbacks = 6 of yours, + public = 7
         check(ok is True and "7 endpoints" in detail and "6 of yours" in detail,
-              "check_rpc_endpoints: counts multiple Alchemy keys + RPC URLs + fallbacks, skips placeholders")
+              "check_rpc_endpoints: counts multiple Alchemy keys + RPC URLs + fallbacks")
+
+        # ── matches the ENGINE exactly (shared build_rpc_endpoints), incl. its
+        # quirks — two regression cases Copilot flagged: ──
+        # (a) a placeholder RPC_URL shadows a later real ARB_RPC_URL, because the
+        #     engine's _env picks the first NON-EMPTY alias before validating it. ──
+        env_shadow = tmp / "shadow.env"
+        env_shadow.write_text(
+            "PRIVATE_KEY=0xabc\n"
+            "RPC_URL=https://arb-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY_HERE\n"  # placeholder, non-empty
+            "ARB_RPC_URL=https://real.rpc/x\n"                                       # ignored: RPC_URL won the group
+        )
+        ok, detail = ig.check_rpc_endpoints(env_shadow)
+        check(ok is True and "public node only" in detail,
+              "check_rpc_endpoints: placeholder RPC_URL shadows real ARB_RPC_URL (matches engine _env)")
+        # (b) the engine builds a URL for EVERY non-empty ALCHEMY_KEY_* (no
+        #     placeholder filtering), so integrate counts it too. ──
+        env_alch_ph = tmp / "alch_ph.env"
+        env_alch_ph.write_text(
+            "PRIVATE_KEY=0xabc\n"
+            "ALCHEMY_KEY_2=YOUR_ALCHEMY_KEY_HERE\n"   # non-empty -> engine uses it -> counts
+        )
+        ok, detail = ig.check_rpc_endpoints(env_alch_ph)
+        check(ok is True and "2 endpoints" in detail and "1 of yours" in detail,
+              "check_rpc_endpoints: non-empty ALCHEMY_KEY_* counts, matching the engine")
 
         # ── de-dup: duplicate URLs and the public fallback must NOT overstate
         # redundancy (mirrors the engine's own de-duplication) ──

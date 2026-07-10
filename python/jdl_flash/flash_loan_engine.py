@@ -131,46 +131,16 @@ def _valid_rpc(u: str) -> bool:
 
 _RPC_URL    = _env('RPC_URL', 'ARBITRUM_RPC_URL', 'ARB_RPC_URL')
 def _build_rpc_endpoints() -> list:
-    """Collect every usable Arbitrum RPC from the environment, in priority order.
+    """Every usable Arbitrum RPC from the environment, in the order get_w3()
+    tries them (it connects to the first that responds AND reports
+    chainId==CHAIN_ID, so dead/non-Arbitrum endpoints are skipped).
 
-    Supports rich .env schemas:
-      • ALCHEMY_ARB_KEY / ALCHEMY_ARBITRUM_KEY and ANY var named ALCHEMY_KEY_*
-        (e.g. ALCHEMY_KEY_FLASHLOAN) → built into arb-mainnet Alchemy URLs.
-      • RPC_URL, ARB_RPC_URL, ARBITRUM_RPC_URL.
-      • Numbered RPC_URL1, RPC_URL2, … RPC_URLn (any count).
-      • RPC_FALLBACKS (comma-separated).
-      • Public Arbitrum node, always appended last.
-    get_w3() then connects to the first that responds AND reports chainId==CHAIN_ID,
-    so non-Arbitrum or dead endpoints in the pool are skipped automatically.
-    """
-    eps = []
-    # 1) Alchemy keys — the dedicated ALCHEMY_ARB_KEY first, then every ALCHEMY_KEY_*.
-    if ALCH_ARB:
-        eps.append(f'https://arb-mainnet.g.alchemy.com/v2/{ALCH_ARB}')
-    for name, val in os.environ.items():
-        if name.startswith('ALCHEMY_KEY_') and val and val.strip():
-            eps.append(f'https://arb-mainnet.g.alchemy.com/v2/{val.strip()}')
-    # 2) Explicit URLs: RPC_URL/ARB_RPC_URL/ARBITRUM_RPC_URL, then numbered RPC_URLn.
-    if _valid_rpc(_RPC_URL):
-        eps.append(_RPC_URL.strip())
-    _numbered = []
-    for name, val in os.environ.items():
-        if name.startswith('RPC_URL') and name != 'RPC_URL' and _valid_rpc(val):
-            suffix = name[len('RPC_URL'):]
-            _numbered.append((int(suffix) if suffix.isdigit() else 1e9, val.strip()))
-    for _, u in sorted(_numbered):
-        eps.append(u)
-    # 3) RPC_FALLBACKS comma list.
-    for u in (_env('RPC_FALLBACKS', default='') or '').split(','):
-        if _valid_rpc(u):
-            eps.append(u.strip())
-    # 4) Public last resort.
-    eps.append('https://arb1.arbitrum.io/rpc')
-    seen, out = set(), []
-    for u in eps:
-        if u not in seen:
-            seen.add(u); out.append(u)
-    return out
+    The actual rules — ALCHEMY_ARB_KEY / any ALCHEMY_KEY_*, RPC_URL /
+    ARB_RPC_URL / ARBITRUM_RPC_URL, numbered RPC_URLn, RPC_FALLBACKS, public
+    node last, de-duplicated — live in jdl_flash.rpc_endpoints.build_rpc_endpoints
+    so `jdl integrate` reports the SAME list this builds (no drift)."""
+    from jdl_flash.rpc_endpoints import build_rpc_endpoints
+    return build_rpc_endpoints(os.environ)
 
 RPC_ENDPOINTS = _build_rpc_endpoints()
 RPC_ARB = RPC_ENDPOINTS[0]               # primary (display + first connection attempt)

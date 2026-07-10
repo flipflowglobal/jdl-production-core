@@ -1,0 +1,79 @@
+"""
+rpc_endpoints.py — the ONE definition of the Arbitrum RPC endpoint list.
+
+Extracted so the engine (flash_loan_engine.build_rpc_endpoints) and `jdl
+integrate` (integrate.check_rpc_endpoints) compute the exact same list from the
+same rules and can never drift. Pure and dependency-free (no web3), so the
+lightweight integrate path can import it without pulling in the whole engine.
+
+The rules are the engine's long-standing behavior — reproduced here verbatim:
+  • `_env_first` picks the first NON-EMPTY alias (before any validity check), so
+    a placeholder RPC_URL shadows a later real ARB_RPC_URL (they're a group, and
+    the first one set wins — even if it turns out invalid).
+  • Explicit/numbered RPC URLs must pass `is_valid_rpc` (rejects the YOUR_ALCHEMY
+    /YOUR_KEY placeholders and URLs containing spaces).
+  • ALCHEMY_ARB_KEY / ALCHEMY_ARBITRUM_KEY (first non-empty) plus EVERY non-empty
+    ALCHEMY_KEY_* are turned into arb-mainnet URLs (Alchemy keys are not
+    placeholder-filtered — any non-empty value is used, matching the engine).
+  • A public Arbitrum node is always appended last, and the whole list is
+    de-duplicated preserving order.
+"""
+from __future__ import annotations
+
+from typing import List, Mapping
+
+ALCHEMY_ARB_URL = "https://arb-mainnet.g.alchemy.com/v2/{}"
+PUBLIC_ARB_RPC = "https://arb1.arbitrum.io/rpc"
+
+
+def _env_first(env: Mapping[str, str], *names: str, default: str = "") -> str:
+    """First non-empty (after strip) value among the alias names — the engine's
+    `_env()`. Note: this does NOT skip placeholders; the first alias that is set
+    wins, and validity is judged afterwards by the caller."""
+    for name in names:
+        val = env.get(name, "")
+        if val and val.strip():
+            return val.strip()
+    return default
+
+
+def is_valid_rpc(url: str) -> bool:
+    """The engine's `_valid_rpc`: a usable explicit RPC URL is non-empty, has no
+    YOUR_ALCHEMY/YOUR_KEY placeholder, and contains no spaces."""
+    return bool(url) and "YOUR_ALCHEMY" not in url and "YOUR_KEY" not in url and " " not in url.strip()
+
+
+def build_rpc_endpoints(env: Mapping[str, str]) -> List[str]:
+    """The de-duplicated Arbitrum RPC URL list, in the order the engine tries
+    them. Pass os.environ (engine) or a parsed .env dict (integrate)."""
+    eps: List[str] = []
+    # 1) Alchemy — dedicated key group first, then every non-empty ALCHEMY_KEY_*.
+    alch = _env_first(env, "ALCHEMY_ARB_KEY", "ALCHEMY_ARBITRUM_KEY")
+    if alch:
+        eps.append(ALCHEMY_ARB_URL.format(alch))
+    for name, val in env.items():
+        if name.startswith("ALCHEMY_KEY_") and val and val.strip():
+            eps.append(ALCHEMY_ARB_URL.format(val.strip()))
+    # 2) Explicit URL group (first non-empty alias, then validated), then RPC_URLn.
+    rpc = _env_first(env, "RPC_URL", "ARBITRUM_RPC_URL", "ARB_RPC_URL")
+    if is_valid_rpc(rpc):
+        eps.append(rpc.strip())
+    numbered = []
+    for name, val in env.items():
+        if name.startswith("RPC_URL") and name != "RPC_URL" and is_valid_rpc(val):
+            suffix = name[len("RPC_URL"):]
+            numbered.append((int(suffix) if suffix.isdigit() else 10 ** 9, val.strip()))
+    for _, url in sorted(numbered):
+        eps.append(url)
+    # 3) RPC_FALLBACKS comma list.
+    for url in (_env_first(env, "RPC_FALLBACKS", default="") or "").split(","):
+        if is_valid_rpc(url):
+            eps.append(url.strip())
+    # 4) Public node, always appended last.
+    eps.append(PUBLIC_ARB_RPC)
+    seen, out = set(), []
+    for url in eps:
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
