@@ -27,8 +27,11 @@ def main():
 
     real_platform = sys.platform
     real_environ_termux = os.environ.pop("TERMUX_VERSION", None)
+    real_environ_prefix = os.environ.pop("PREFIX", None)
     real_exists = pd.Path.exists
     real_proc_version = pd._proc_version
+    real_which = pd.shutil.which
+    pd.shutil.which = lambda _name: None  # no `pkg` on PATH unless a test sets it
 
     try:
         # ── Windows: sys.platform alone decides it, before any other check ──
@@ -44,9 +47,26 @@ def main():
         check(pd.detect_platform() == pd.TERMUX, "TERMUX_VERSION env var -> termux")
         os.environ.pop("TERMUX_VERSION")
 
-        # ── Termux: filesystem marker (no env var set) ──
+        # ── Termux: PREFIX under com.termux (no env var / no pkg on PATH) ──
+        os.environ["PREFIX"] = "/data/data/com.termux/files/usr"
+        pd.Path.exists = lambda self: False
+        check(pd.detect_platform() == pd.TERMUX, "PREFIX under com.termux -> termux")
+        os.environ.pop("PREFIX")
+
+        # ── Termux: `pkg` resolves inside the com.termux prefix ──
+        pd.shutil.which = lambda name: "/data/data/com.termux/files/usr/bin/pkg" if name == "pkg" else None
+        check(pd.detect_platform() == pd.TERMUX, "`pkg` under com.termux on PATH -> termux")
+        pd.shutil.which = lambda _name: None
+
+        # ── NOT Termux: /data/data/com.termux exists but we are NOT running
+        # under Termux. A co-installed UserLAnd (proot Ubuntu on the same
+        # Android device) can see that host dir — it must NOT be misdetected as
+        # Termux (regression: doing so runs termux-install.sh, which dies on
+        # `pkg: command not found`). /proc/version says "android" -> userland. ──
         pd.Path.exists = lambda self: str(self) == "/data/data/com.termux"
-        check(pd.detect_platform() == pd.TERMUX, "/data/data/com.termux exists -> termux")
+        pd._proc_version = lambda: "linux version ... -android-... ..."
+        check(pd.detect_platform() == pd.USERLAND,
+              "com.termux dir visible but not running Termux -> userland (co-install fix)")
         pd.Path.exists = lambda self: False
 
         # ── UserLAnd: /proc/version marker ──
@@ -77,8 +97,11 @@ def main():
         sys.platform = real_platform
         pd.Path.exists = real_exists
         pd._proc_version = real_proc_version
+        pd.shutil.which = real_which
         if real_environ_termux is not None:
             os.environ["TERMUX_VERSION"] = real_environ_termux
+        if real_environ_prefix is not None:
+            os.environ["PREFIX"] = real_environ_prefix
 
     print(f"\nResults: {passed}/{passed + failed} passed")
     return 0 if failed == 0 else 1

@@ -73,6 +73,25 @@ def main():
         check(ok is False, "check_required_keys: template-default RPC_URL with no ALCHEMY_ARB_KEY -> not ok")
         check("RPC_URL" in detail, "check_required_keys: flags the missing RPC source")
 
+        # ── check_rpc_endpoints: counts every real RPC source for failover ──
+        ok, detail = ig.check_rpc_endpoints(env_neither)
+        check(ok is True and "public node only" in detail,
+              "check_rpc_endpoints: no real sources -> public-only, still ok (never fails)")
+        env_multi = tmp / "multi.env"
+        env_multi.write_text(
+            "PRIVATE_KEY=0xabc123\n"
+            "ALCHEMY_ARB_KEY=key-one\n"
+            "ALCHEMY_KEY_2=key-two\n"
+            "RPC_URL=https://my.rpc/one\n"
+            "RPC_URL2=https://my.rpc/two\n"
+            "RPC_FALLBACKS=https://fb.rpc/a,https://fb.rpc/b\n"
+            "ALCHEMY_KEY_BAD=YOUR_ALCHEMY_KEY_HERE\n"   # placeholder must NOT count
+        )
+        ok, detail = ig.check_rpc_endpoints(env_multi)
+        # 2 alchemy + 2 rpc urls + 2 fallbacks = 6 of yours, + public = 7
+        check(ok is True and "7 endpoints" in detail and "6 of yours" in detail,
+              "check_rpc_endpoints: counts multiple Alchemy keys + RPC URLs + fallbacks, skips placeholders")
+
         # ── _resolve_rpc_url: pure priority logic, no network ──
         check(ig._resolve_rpc_url({"ALCHEMY_ARB_KEY": "abc", "RPC_URL": "https://example.com"})
               == "https://arb-mainnet.g.alchemy.com/v2/abc",

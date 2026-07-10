@@ -54,12 +54,22 @@ warn() { echo -e "${YELLOW}⚠ $1${RESET}"; }
 fail() { echo -e "${RED}✗ $1${RESET}"; exit 1; }
 hdr()  { echo; echo -e "${CYAN}${BOLD}━━ $1 ━━${RESET}"; }
 
+# Termux from its RUNTIME env, not the /data/data/com.termux dir — otherwise a
+# co-installed UserLAnd (which can see that host dir) would wrongly trip this
+# guard and refuse to run on the very platform it's meant for.
+is_termux() {
+    [ -n "${TERMUX_VERSION:-}" ] && return 0
+    case "${PREFIX:-}" in *com.termux*) return 0 ;; esac
+    case "$(command -v pkg 2>/dev/null)" in */com.termux/*) return 0 ;; esac
+    return 1
+}
+
 echo -e "${CYAN}${BOLD}"
 echo "  JDL FLASH ENGINE · UserLAnd one-command setup + start"
 echo -e "${RESET}"
 
 # ── Guard: this is the glibc path, not Termux ────────────────────────────
-if [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux" ]; then
+if is_termux; then
     warn "This looks like Termux (Bionic libc), not UserLAnd."
     echo -e "  ${DIM}Use the Termux installer instead: bash scripts/termux-install.sh${RESET}"
     fail "Wrong platform for userland-setup.sh."
@@ -131,18 +141,44 @@ PY
     # FLASH_CONTRACT_ADDRESS (optional)
     printf "  FLASH_CONTRACT_ADDRESS (optional — Enter to skip, scan-only works without it): "; read -r IN_FCA
 
+    # ── Extra RPC sources for redundancy/failover ────────────────────────
+    # The engine reads any number of ALCHEMY_KEY_* and numbered RPC_URLn and
+    # tries each in turn (get_w3()), so one provider rate-limiting never takes
+    # the bot offline. Collect them as KEY=VALUE lines for one write.
+    ENTRIES=""
+    add_entry() { [ -n "$2" ] && ENTRIES="${ENTRIES}${1}=${2}
+"; }
+    add_entry PRIVATE_KEY "$IN_PK"
+    add_entry ALCHEMY_ARB_KEY "$IN_ALCH"
+    add_entry FLASH_CONTRACT_ADDRESS "$IN_FCA"
+
+    echo -e "\n  ${DIM}Add more Alchemy keys / RPC URLs for failover (recommended). Enter to stop.${RESET}"
+    n=2
+    while : ; do
+        printf "  Additional Alchemy key #%s (Enter to stop): " "$n"; read -r extra_k
+        [ -z "$extra_k" ] && break
+        add_entry "ALCHEMY_KEY_$n" "$extra_k"; n=$((n+1))
+    done
+    m=2
+    while : ; do
+        printf "  Additional RPC URL #%s (full https://… , Enter to stop): " "$m"; read -r extra_u
+        [ -z "$extra_u" ] && break
+        add_entry "RPC_URL$m" "$extra_u"; m=$((m+1))
+    done
+
     # Persist through the engine's own writer (in-place, 0600, skips blanks).
-    IN_PK="$IN_PK" IN_ALCH="$IN_ALCH" IN_FCA="$IN_FCA" "$VENV_PY" - <<'PY'
+    JDL_ENTRIES="$ENTRIES" "$VENV_PY" - <<'PY'
 import os
 from jdl_flash.env_autowire import set_values
 vals = {}
-if os.environ.get("IN_PK"):   vals["PRIVATE_KEY"] = os.environ["IN_PK"]
-if os.environ.get("IN_ALCH"): vals["ALCHEMY_ARB_KEY"] = os.environ["IN_ALCH"]
-if os.environ.get("IN_FCA"):  vals["FLASH_CONTRACT_ADDRESS"] = os.environ["IN_FCA"]
+for line in os.environ.get("JDL_ENTRIES", "").splitlines():
+    if "=" in line:
+        k, v = line.split("=", 1)
+        vals[k.strip()] = v
 written = set_values(vals)
 print("  ✓ saved to ~/jdl/.env:", ", ".join(written) if written else "(no new values)")
 PY
-    unset IN_PK IN_ALCH IN_FCA
+    unset IN_PK IN_ALCH IN_FCA ENTRIES
 fi
 
 # ── 4. Verify wiring ─────────────────────────────────────────────────────

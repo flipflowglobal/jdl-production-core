@@ -85,6 +85,32 @@ def check_rpc_reachable(env_path: Path = CANONICAL_ENV, timeout: float = 4.0) ->
         return False, f"unreachable ({exc})"
 
 
+def _real(value: str) -> bool:
+    return bool(value) and not is_placeholder(value) and " " not in value.strip()
+
+
+def check_rpc_endpoints(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
+    """Count the Arbitrum RPC endpoints the engine will try, mirroring
+    flash_loan_engine._build_rpc_endpoints(): the dedicated + any numbered
+    Alchemy keys (ALCHEMY_ARB_KEY, ALCHEMY_KEY_*), explicit + numbered RPC URLs
+    (RPC_URL, ARB_RPC_URL, RPC_URL2…), RPC_FALLBACKS, plus the public node the
+    engine always appends. Informational (never fails) — but >1 means real
+    failover, so one provider rate-limiting won't take the bot offline."""
+    values = parse_env_file(env_path)
+    own = 0
+    for key, val in values.items():
+        if (key in ("ALCHEMY_ARB_KEY", "ALCHEMY_ARBITRUM_KEY") or key.startswith("ALCHEMY_KEY_")) and _real(val):
+            own += 1
+        elif (key in ("RPC_URL", "ARB_RPC_URL", "ARBITRUM_RPC_URL") or (key.startswith("RPC_URL") and key != "RPC_URL")) and _real(val):
+            own += 1
+    for url in (values.get("RPC_FALLBACKS", "") or "").split(","):
+        if _real(url):
+            own += 1
+    if own == 0:
+        return True, "1 endpoint (public node only) — add ALCHEMY_ARB_KEY / RPC_URL for your own, ideally several"
+    return True, f"{own + 1} endpoints ({own} of yours + public fallback) — failover ready"
+
+
 def check_daemon_liveness() -> Tuple[bool, str]:
     fs = load_flash_supervisor()
     if fs.PID_FILE.exists():
@@ -95,6 +121,7 @@ def check_daemon_liveness() -> Tuple[bool, str]:
 CHECKS: List[Tuple[str, Callable[[], Tuple[bool, str]]]] = [
     ("Canonical .env file", check_env_file),
     ("Required keys wired", check_required_keys),
+    ("RPC endpoints configured", check_rpc_endpoints),
     ("Flash contract deployed", check_contract_address),
     ("RPC endpoint reachable", check_rpc_reachable),
     ("Supervised daemon", check_daemon_liveness),

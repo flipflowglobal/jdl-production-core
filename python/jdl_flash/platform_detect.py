@@ -11,6 +11,7 @@ setup.sh like any other POSIX box rather than getting its own script.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -33,18 +34,36 @@ def _proc_version() -> str:
         return ""
 
 
+def _is_termux() -> bool:
+    """True only when actually *running under* Termux — detected from its
+    runtime environment, never from the mere existence of /data/data/com.termux.
+
+    That directory belongs to the Android host, and a co-installed UserLAnd (a
+    proot Ubuntu on the same device) can see it too — so testing for the path
+    misdetects UserLAnd as Termux and then fails on `pkg: command not found`.
+    Termux always exports TERMUX_VERSION and points PREFIX at its own usr dir,
+    and its `pkg` wrapper lives under that prefix; UserLAnd has none of these.
+    """
+    if os.environ.get("TERMUX_VERSION"):
+        return True
+    if "com.termux" in os.environ.get("PREFIX", ""):
+        return True
+    pkg = shutil.which("pkg")
+    return bool(pkg and "com.termux" in pkg)
+
+
 def detect_platform() -> str:
     if sys.platform.startswith("win"):
         return WINDOWS
 
-    if os.environ.get("TERMUX_VERSION") or Path("/data/data/com.termux").exists():
+    if _is_termux():
         return TERMUX
 
     proc_version = _proc_version()
-    # Matches setup.sh's own long-standing heuristic (`grep -qi
-    # 'userland\|android' /proc/version`) exactly, so this Python-side check
-    # and the bash script it's about to hand off to never disagree about
-    # what device they're running on.
+    # NB: /proc/version says "android" on BOTH real Termux and UserLAnd, so it
+    # can't distinguish them — that's why the Termux check above keys off the
+    # runtime env, and this "android" case is reached only when we're on an
+    # Android device but NOT inside Termux, i.e. UserLAnd.
     if "userland" in proc_version or "android" in proc_version:
         return USERLAND
 
