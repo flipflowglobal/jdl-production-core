@@ -201,7 +201,7 @@ for line in os.environ.get("JDL_ENTRIES", "").splitlines():
 written = set_values(vals)
 print("  ✓ saved to ~/jdl/.env:", ", ".join(written) if written else "(no new values)")
 PY
-    unset IN_PK IN_ALCH IN_FCA ENTRIES
+    unset IN_PK IN_ALCH IN_FCA ENTRIES JDL_ENTRIES
 fi
 
 # ── 4. Verify wiring ─────────────────────────────────────────────────────

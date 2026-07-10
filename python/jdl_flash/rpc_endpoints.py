@@ -26,6 +26,9 @@ from typing import List, Mapping
 
 ALCHEMY_ARB_URL = "https://arb-mainnet.g.alchemy.com/v2/{}"
 PUBLIC_ARB_RPC = "https://arb1.arbitrum.io/rpc"
+# Sort key for RPC_URL* names with non-numeric suffixes (e.g. RPC_URL_BACKUP);
+# must be larger than any realistic numeric suffix so they sort after numbered ones.
+_NON_NUMERIC_SUFFIX_SORT_KEY = 10 ** 9
 
 
 def _env_first(env: Mapping[str, str], *names: str, default: str = "") -> str:
@@ -70,7 +73,7 @@ def build_rpc_endpoints(env: Mapping[str, str]) -> List[str]:
     for name, val in env.items():
         if name.startswith("RPC_URL") and name != "RPC_URL" and is_valid_rpc(val):
             suffix = name[len("RPC_URL"):]
-            numbered.append((int(suffix) if suffix.isdigit() else 10 ** 9, val.strip()))
+            numbered.append((int(suffix) if suffix.isdigit() else _NON_NUMERIC_SUFFIX_SORT_KEY, val.strip()))
     for _, url in sorted(numbered):
         eps.append(url)
     # 3) RPC_FALLBACKS comma list.
