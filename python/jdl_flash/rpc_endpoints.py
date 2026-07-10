@@ -43,9 +43,11 @@ def _env_first(env: Mapping[str, str], *names: str, default: str = "") -> str:
 
 
 def is_valid_rpc(url: str) -> bool:
-    """The engine's `_valid_rpc`: a usable explicit RPC URL is non-empty, has no
-    YOUR_ALCHEMY/YOUR_KEY placeholder, and contains no spaces."""
-    return bool(url) and "YOUR_ALCHEMY" not in url and "YOUR_KEY" not in url and " " not in url.strip()
+    """A usable explicit RPC URL: non-empty, no YOUR_ALCHEMY/YOUR_KEY placeholder,
+    no spaces. Marker checks are case-INSENSITIVE (like env_autowire.is_placeholder),
+    so a lower-case template value `.../your_alchemy_key_here` is rejected too."""
+    low = url.lower()
+    return bool(url) and "your_alchemy" not in low and "your_key" not in low and " " not in url.strip()
 
 
 def build_rpc_endpoints(env: Mapping[str, str]) -> List[str]:

@@ -116,6 +116,19 @@ def main():
         check(ok is True and "public node only" in detail,
               "check_rpc_endpoints: placeholder ALCHEMY_KEY_* is filtered (not counted)")
 
+        # (c) placeholder detection is case-INSENSITIVE (like is_placeholder), so a
+        #     lower-case template value is filtered, not counted as usable. ──
+        env_lower = tmp / "lower.env"
+        env_lower.write_text(
+            "PRIVATE_KEY=0xabc\n"
+            "RPC_URL=https://arb-mainnet.g.alchemy.com/v2/your_alchemy_key_here\n"  # lower-case placeholder
+        )
+        ok, detail = ig.check_rpc_endpoints(env_lower)
+        check(ok is True and "public node only" in detail,
+              "check_rpc_endpoints: lower-case placeholder is filtered (case-insensitive)")
+        ok, _ = ig.check_required_keys(env_lower)
+        check(ok is False, "check_required_keys: lower-case placeholder RPC_URL is not a real source")
+
         # ── de-dup: duplicate URLs and the public fallback must NOT overstate
         # redundancy (mirrors the engine's own de-duplication) ──
         env_dup = tmp / "dup.env"
@@ -201,6 +214,19 @@ def main():
             ok, detail = ig.check_rpc_reachable(env_two)
             check(ok is False and "no endpoint reachable" in detail,
                   "check_rpc_reachable: all endpoints dead -> not ok")
+
+            # CHAIN_ID drives the expected chain: a Sepolia endpoint on a Sepolia
+            # config is reachable (not "wrong chain"), and a mainnet endpoint is not
+            env_sep = tmp / "sepolia.env"
+            env_sep.write_text("PRIVATE_KEY=0xabc\nRPC_URL=https://sep.rpc/x\nCHAIN_ID=421614\n")
+            ig._probe_chain_id = lambda url, timeout: 421614
+            ok, detail = ig.check_rpc_reachable(env_sep)
+            check(ok is True and "endpoint #1" in detail,
+                  "check_rpc_reachable: Sepolia endpoint on CHAIN_ID=421614 -> reachable (not wrong-chain)")
+            ig._probe_chain_id = lambda url, timeout: 42161
+            ok, detail = ig.check_rpc_reachable(env_sep)
+            check(ok is False and "wrong chain" in detail,
+                  "check_rpc_reachable: mainnet chain on a Sepolia config -> wrong chain")
         finally:
             ig._probe_chain_id = real_probe
 
