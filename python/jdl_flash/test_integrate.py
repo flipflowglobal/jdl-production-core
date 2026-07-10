@@ -142,6 +142,13 @@ def main():
         check(ok is True and "2 endpoints" in detail and "1 of yours" in detail,
               "check_rpc_endpoints: de-dupes duplicate URLs and the public node (no overstated redundancy)")
 
+        # ── the public node is always LAST, even if a user configures it as a
+        # numbered slot ahead of a private fallback ──
+        from jdl_flash.rpc_endpoints import build_rpc_endpoints as _bre, PUBLIC_ARB_RPC as _PUB
+        eps = _bre({"RPC_URL2": _PUB, "RPC_URL3": "https://private.fallback/x"})
+        check(eps[-1] == _PUB and eps.index("https://private.fallback/x") < len(eps) - 1,
+              "build_rpc_endpoints: public node forced last even when set as RPC_URLn (private fallback runs first)")
+
         # ── alias precedence: RPC_URL wins its group; ARB_RPC_URL alias is not
         # counted as a second endpoint (matches the engine's _env) ──
         env_alias = tmp / "alias.env"
