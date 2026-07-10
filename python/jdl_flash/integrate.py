@@ -89,26 +89,68 @@ def _real(value: str) -> bool:
     return bool(value) and not is_placeholder(value) and " " not in value.strip()
 
 
-def check_rpc_endpoints(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
-    """Count the Arbitrum RPC endpoints the engine will try, mirroring
-    flash_loan_engine._build_rpc_endpoints(): the dedicated + any numbered
-    Alchemy keys (ALCHEMY_ARB_KEY, ALCHEMY_KEY_*), explicit + numbered RPC URLs
-    (RPC_URL, ARB_RPC_URL, RPC_URL2…), RPC_FALLBACKS, plus the public node the
-    engine always appends. Informational (never fails) — but >1 means real
-    failover, so one provider rate-limiting won't take the bot offline."""
-    values = parse_env_file(env_path)
-    own = 0
-    for key, val in values.items():
-        if (key in ("ALCHEMY_ARB_KEY", "ALCHEMY_ARBITRUM_KEY") or key.startswith("ALCHEMY_KEY_")) and _real(val):
-            own += 1
-        elif (key in ("RPC_URL", "ARB_RPC_URL", "ARBITRUM_RPC_URL") or (key.startswith("RPC_URL") and key != "RPC_URL")) and _real(val):
-            own += 1
+def _first_real(values: dict, *names: str) -> str:
+    """First non-placeholder value among alias names — mirrors the engine's
+    _env(): first alias set wins, the rest of the group is ignored."""
+    for name in names:
+        if _real(values.get(name, "")):
+            return values[name].strip()
+    return ""
+
+
+_PUBLIC_ARB_RPC = "https://arb1.arbitrum.io/rpc"
+
+
+def _canonical_rpc_endpoints(values: dict) -> list:
+    """The DEDUPLICATED Arbitrum RPC URL list the engine will actually try,
+    reproducing flash_loan_engine._build_rpc_endpoints()'s alias precedence and
+    de-duplication (that function is the source of truth — keep this in sync).
+    Counting raw config vars would overstate redundancy, because the engine
+    picks one value per alias group and drops duplicate URLs (including the
+    always-appended public node)."""
+    eps = []
+    # 1) Alchemy — dedicated key group first, then every ALCHEMY_KEY_*.
+    alch = _first_real(values, "ALCHEMY_ARB_KEY", "ALCHEMY_ARBITRUM_KEY")
+    if alch:
+        eps.append(f"https://arb-mainnet.g.alchemy.com/v2/{alch}")
+    for name in sorted(values):
+        if name.startswith("ALCHEMY_KEY_") and _real(values[name]):
+            eps.append(f"https://arb-mainnet.g.alchemy.com/v2/{values[name].strip()}")
+    # 2) Explicit URL group, then numbered RPC_URLn in numeric order.
+    rpc = _first_real(values, "RPC_URL", "ARBITRUM_RPC_URL", "ARB_RPC_URL")
+    if rpc:
+        eps.append(rpc)
+    numbered = []
+    for name in values:
+        if name.startswith("RPC_URL") and name != "RPC_URL" and _real(values[name]):
+            suffix = name[len("RPC_URL"):]
+            numbered.append((int(suffix) if suffix.isdigit() else 10 ** 9, values[name].strip()))
+    for _, url in sorted(numbered):
+        eps.append(url)
+    # 3) RPC_FALLBACKS comma list.
     for url in (values.get("RPC_FALLBACKS", "") or "").split(","):
         if _real(url):
-            own += 1
-    if own == 0:
+            eps.append(url.strip())
+    # 4) Public node, always appended last.
+    eps.append(_PUBLIC_ARB_RPC)
+    seen, out = set(), []
+    for url in eps:
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
+
+
+def check_rpc_endpoints(env_path: Path = CANONICAL_ENV) -> Tuple[bool, str]:
+    """Report how many DISTINCT Arbitrum RPC endpoints the engine will try —
+    after alias-precedence selection and de-duplication — so duplicate URLs or
+    redundant aliases never overstate redundancy. Informational (never fails),
+    but >1 non-public endpoint means real failover if a provider rate-limits."""
+    eps = _canonical_rpc_endpoints(parse_env_file(env_path))
+    own = len(eps) - 1  # the public fallback is always present after de-dup
+    if own <= 0:
         return True, "1 endpoint (public node only) — add ALCHEMY_ARB_KEY / RPC_URL for your own, ideally several"
-    return True, f"{own + 1} endpoints ({own} of yours + public fallback) — failover ready"
+    return True, f"{len(eps)} endpoints ({own} of yours + public fallback) — failover ready"
 
 
 def check_daemon_liveness() -> Tuple[bool, str]:
