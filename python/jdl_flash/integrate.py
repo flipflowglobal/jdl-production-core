@@ -82,25 +82,40 @@ def _probe_chain_id(url: str, timeout: float) -> int:
 
 
 def check_rpc_reachable(env_path: Path = CANONICAL_ENV, timeout: float = 4.0) -> Tuple[bool, str]:
-    """Probe the engine's endpoint list in order (get_w3() failover), reporting
-    reachable if ANY responds on the CONFIGURED chain — so a dead primary with a
-    healthy fallback reads as reachable, exactly like the running engine."""
+    """Probe the engine's endpoint list and report reachable if ANY responds on
+    the CONFIGURED chain — so a dead primary with a healthy fallback reads as
+    reachable, like the running engine. Endpoints are probed CONCURRENTLY, so
+    total latency stays ~one `timeout` no matter how many failover entries are
+    configured (a sequential probe would grow linearly and stall --watch/setup).
+    The result still reports the first reachable endpoint in engine order."""
+    import concurrent.futures
+
     from jdl_flash.rpc_endpoints import build_rpc_endpoints, PUBLIC_ARB_RPC
 
     values = parse_env_file(env_path)
     expected = _expected_chain_id(values)
     endpoints = build_rpc_endpoints(values)
+
+    results: dict = {}  # 1-based index -> chain id (int) or Exception
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(endpoints), 12)) as pool:
+        futures = {pool.submit(_probe_chain_id, url, timeout): i for i, url in enumerate(endpoints, 1)}
+        for fut in concurrent.futures.as_completed(futures):
+            i = futures[fut]
+            try:
+                results[i] = fut.result()
+            except Exception as exc:  # noqa: BLE001 — a failed probe just means that endpoint is down
+                results[i] = exc
+
     last_err: object = "none tried"
     for i, url in enumerate(endpoints, 1):
-        try:
-            chain = _probe_chain_id(url, timeout)
-        except Exception as exc:  # noqa: BLE001 — any failure just means "try the next endpoint"
-            last_err = exc
-            continue
-        if chain == expected:
-            where = "public fallback" if url == PUBLIC_ARB_RPC else f"endpoint #{i}/{len(endpoints)}"
-            return True, f"chain {chain} via {where}"
-        last_err = f"wrong chain {chain} (expected {expected})"
+        outcome = results.get(i)
+        if isinstance(outcome, int):
+            if outcome == expected:
+                where = "public fallback" if url == PUBLIC_ARB_RPC else f"endpoint #{i}/{len(endpoints)}"
+                return True, f"chain {outcome} via {where}"
+            last_err = f"wrong chain {outcome} (expected {expected})"
+        else:
+            last_err = outcome
     return False, f"no endpoint reachable ({len(endpoints)} tried; last: {last_err})"
 
 

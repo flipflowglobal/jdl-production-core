@@ -82,11 +82,16 @@ def build_rpc_endpoints(env: Mapping[str, str]) -> List[str]:
     for url in (_env_first(env, "RPC_FALLBACKS", default="") or "").split(","):
         if is_valid_rpc(url):
             eps.append(url.strip())
-    # 4) Public node, always appended last.
-    eps.append(PUBLIC_ARB_RPC)
+    # 4) De-duplicate the user's endpoints, DROPPING any that equal the public
+    #    node, then append the public node exactly once at the end. (If a user
+    #    lists the public URL as RPC_URLn / in RPC_FALLBACKS, keeping its first
+    #    occurrence would let it run ahead of later private fallbacks — so it must
+    #    always be forced last.)
     seen, out = set(), []
     for url in eps:
-        if url not in seen:
-            seen.add(url)
-            out.append(url)
+        if url == PUBLIC_ARB_RPC or url in seen:
+            continue
+        seen.add(url)
+        out.append(url)
+    out.append(PUBLIC_ARB_RPC)
     return out
