@@ -207,6 +207,34 @@ Installed by `pip install -e python/`. Run `jdl --help` or `jdl <command> --help
 | `npm run deploy:arbitrum` | Deploy the flash receiver to Arbitrum |
 | `npm run deploy:ethereum` | Deploy the flash receiver to Ethereum |
 
+### Using as a dependency
+
+The `contracts/` directory is published as the **`jdl-production-core`** npm package.
+Install it from GitHub in any downstream Solidity project:
+
+```bash
+npm install flipflowglobal/jdl-production-core
+# or pin to a tag:
+npm install flipflowglobal/jdl-production-core#v1.0.0
+```
+
+Then import in Solidity (Hardhat or Foundry):
+
+```solidity
+import "jdl-production-core/contracts/NexusFlashReceiver.sol";
+import "jdl-production-core/contracts/ArbitrageLib.sol";
+import "jdl-production-core/contracts/interfaces/IAaveV3Pool.sol";
+```
+
+For **Foundry**, add the remapping to your `foundry.toml`:
+
+```toml
+remappings = [
+    "jdl-production-core/=node_modules/jdl-production-core/",
+    "@openzeppelin/=node_modules/@openzeppelin/",
+]
+```
+
 ### Node server (`node/package.json`, legacy/optional — skipped on Termux)
 
 | Command | What it does |
