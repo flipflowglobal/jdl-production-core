@@ -1,17 +1,18 @@
-Proprietary Software License
+Business Source License 1.1
 
-Copyright (c) 2026 Darcel King. All rights reserved.
+Licensor: FlipFlow Global
+Licensed Work: The software and associated documentation files in this repository.
 
-This software and its associated documentation files (the "Software") are
-proprietary and confidential. No part of the Software may be reproduced,
-distributed, or transmitted in any form or by any means without the prior
-written permission of the copyright holder.
+Additional Grant:
+You may use the Licensed Work for development, testing, research, and non-commercial evaluation purposes.
 
-The Software is provided "AS IS", without warranty of any kind, express or
-implied, including but not limited to the warranties of merchantability,
-fitness for a particular purpose, and noninfringement. In no event shall the
-copyright holder be liable for any claim, damages, or other liability arising
-from the use of the Software.
+Use Restrictions:
+You may not use the Licensed Work in a production environment or for any commercial purpose without a separate commercial license from the Licensor.
 
-Unauthorized copying, modification, distribution, or use of the Software is
-strictly prohibited.
+Change Date: 2028-07-24
+
+Change License: GNU General Public License v2.0 or later (GPL-2.0-or-later)
+
+Notice:
+The Business Source License 1.1 (this document) runs until the Change Date.
+After the Change Date, the Licensed Work will be licensed under the Change License.
