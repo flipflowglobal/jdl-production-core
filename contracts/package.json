@@ -1,7 +1,15 @@
 {
-  "name": "jdl-contracts",
+  "name": "jdl-production-core",
   "version": "1.0.0",
-  "private": true,
+  "description": "JDL Production Core — Solidity flash-loan arbitrage contracts (NexusFlashReceiver, ArbitrageLib, FlashZeroGas, ProfitPaymaster)",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flipflowglobal/jdl-production-core.git"
+  },
+  "files": [
+    "contracts"
+  ],
   "scripts": {
     "compile": "npx hardhat compile",
     "test": "npx hardhat test",
@@ -18,7 +26,7 @@
     "@nomicfoundation/hardhat-toolbox": "^7.0.0",
     "chai": "^6.2.2",
     "ethers": "^6.17.0",
-    "hardhat": "^3.10.0"
+    "hardhat": "^3.11.1"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.6.1"
