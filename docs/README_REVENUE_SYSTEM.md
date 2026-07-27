@@ -24,7 +24,7 @@
 | `revenue_schema.sql` | 12K | SQLite3 schema: tables, triggers, views, indexes |
 | `revenue_reconciliation.py` | 17K | On-chain balance checker vs .db records |
 | `chain_monitor_fixed.py` | 20K | RPC health monitor with exception logging |
-| `deploy_revenue_system.sh` | 20K | Auto-detect projects, initialize all .db, copy scripts |
+| `deploy_termux.sh` | 20K | Auto-detect projects, initialize all .db, copy scripts |
 | `INTEGRATION_GUIDE.txt` | 14K | Copy-paste code for your bot, quick reference |
 
 **Total:** ~83KB of production code
@@ -39,7 +39,7 @@
 # On your PC/laptop:
 scp -r /home/claude/revenue* username@your-device:~/
 scp /home/claude/chain_monitor_fixed.py username@your-device:~/
-scp /home/claude/deploy_revenue_system.sh username@your-device:~/
+scp /home/claude/deploy_termux.sh username@your-device:~/
 
 # Then SSH in:
 ssh username@your-device
@@ -49,7 +49,7 @@ ssh username@your-device
 
 ```bash
 cd ~
-bash deploy_revenue_system.sh
+bash deploy_termux.sh
 ```
 
 **That's it.** Script auto-detects all your projects (dl.2, aureon, flipflow, nexus-arb), initializes schemas, copies monitoring scripts, and creates launcher scripts.
@@ -58,7 +58,7 @@ bash deploy_revenue_system.sh
 
 ## What Gets Installed
 
-After `deploy_revenue_system.sh` runs:
+After `deploy_termux.sh` runs:
 
 ### Per-project (e.g., `~/dl.2/`)
 
@@ -309,7 +309,7 @@ pip3 install web3 requests
 
 Schema not initialized. Re-run:
 ```bash
-bash ~/deploy_revenue_system.sh
+bash ~/deploy_termux.sh
 ```
 
 ### "RPC timeout" or "Connection refused"
@@ -349,7 +349,7 @@ cd ~/dl.2
 
 ## Integration Checklist
 
-- [ ] Run `bash deploy_revenue_system.sh`
+- [ ] Run `bash deploy_termux.sh`
 - [ ] Set contract addresses in `~/revenue_system.conf`
 - [ ] Copy `record_flash_arbitrage()` function into your bot code
 - [ ] Call `record_flash_arbitrage()` after each flash arbitrage execution
@@ -416,7 +416,7 @@ python3 chain_monitor.py /path/to/aureon.db --daemon --interval 60
 - `chain_health` table (results)
 - `rpc_diagnostics` table (errors)
 
-### `deploy_revenue_system.sh`
+### `deploy_termux.sh`
 Master deployment script. **Run once after copying files.**
 
 **Auto-detects:**
@@ -435,7 +435,7 @@ Master deployment script. **Run once after copying files.**
 
 **No arguments needed:**
 ```bash
-bash deploy_revenue_system.sh
+bash deploy_termux.sh
 ```
 
 ---
@@ -490,14 +490,14 @@ bash deploy_revenue_system.sh
 
 1. **Copy files to device:**
    ```bash
-   scp /home/claude/revenue* ~/chain_monitor_fixed.py ~/deploy_revenue_system.sh user@device:~/
+   scp /home/claude/revenue* ~/chain_monitor_fixed.py ~/deploy_termux.sh user@device:~/
    ```
 
 2. **Run deployment:**
    ```bash
    ssh user@device
    cd ~
-   bash deploy_revenue_system.sh
+   bash deploy_termux.sh
    ```
 
 3. **Configure:**
@@ -530,10 +530,10 @@ bash deploy_revenue_system.sh
 - `revenue_schema.sql`
 - `revenue_reconciliation.py`
 - `chain_monitor_fixed.py`
-- `deploy_revenue_system.sh`
+- `deploy_termux.sh`
 - `INTEGRATION_GUIDE.txt`
 
-Copy to your device and run `bash deploy_revenue_system.sh`.
+Copy to your device and run `bash deploy_termux.sh`.
 
 ---
 

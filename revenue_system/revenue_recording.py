@@ -95,10 +95,11 @@ def record_flash_arbitrage(db_path: str, trade_data: Dict) -> bool:
         logger.error(f"Database file not found: {actual_db_path}")
         return False
     
+    conn = None
     try:
         conn = sqlite3.connect(actual_db_path)
         c = conn.cursor()
-        
+
         c.execute("""
             INSERT INTO flash_trades
             (project, chain, asset_borrowed, amount_borrowed, fee_paid,
@@ -122,18 +123,22 @@ def record_flash_arbitrage(db_path: str, trade_data: Dict) -> bool:
             trade_data['contract_address'],
             trade_data.get('initiator'),
         ))
-        
+
         conn.commit()
-        conn.close()
-        
+
         logger.info(f"✓ Recorded: {trade_data['tx_hash'][:10]}... | "
                    f"Net: ${trade_data.get('net_profit', 0):.2f} | "
                    f"Chain: {trade_data.get('chain')}")
         return True
-        
+
+    except sqlite3.IntegrityError as e:
+        # Most commonly a duplicate tx_hash (UNIQUE) — an already-recorded trade,
+        # not a schema problem. Log and move on.
+        logger.error(f"Trade not recorded (integrity): {e}")
+        return False
     except sqlite3.OperationalError as e:
         logger.error(f"Database error: {e}")
-        logger.error("Make sure database schema is initialized: run deploy_revenue_system_v2.sh")
+        logger.error("Make sure database schema is initialized: run deploy_termux.sh")
         return False
     except KeyError as e:
         logger.error(f"Missing required field: {e}")
@@ -141,6 +146,10 @@ def record_flash_arbitrage(db_path: str, trade_data: Dict) -> bool:
     except Exception as e:
         logger.error(f"Failed to record trade: {e}")
         return False
+    finally:
+        # Always close so an error path never leaks an open (locking) connection.
+        if conn is not None:
+            conn.close()
 
 def record_withdrawal(db_path: str, withdrawal_data: Dict) -> bool:
     """
@@ -174,10 +183,11 @@ def record_withdrawal(db_path: str, withdrawal_data: Dict) -> bool:
         logger.error(f"Database file not found: {actual_db_path}")
         return False
     
+    conn = None
     try:
         conn = sqlite3.connect(actual_db_path)
         c = conn.cursor()
-        
+
         c.execute("""
             INSERT INTO withdrawals
             (project, chain, token, amount, from_contract, to_address, tx_hash, gas_cost, status)
@@ -192,14 +202,16 @@ def record_withdrawal(db_path: str, withdrawal_data: Dict) -> bool:
             withdrawal_data['tx_hash'],
             float(withdrawal_data.get('gas_cost', 0))
         ))
-        
+
         conn.commit()
-        conn.close()
-        
+
         logger.info(f"✓ Recorded withdrawal: {withdrawal_data.get('amount', 0):.2f} "
                    f"{withdrawal_data.get('token')} from {withdrawal_data.get('chain')}")
         return True
-        
+
+    except sqlite3.IntegrityError as e:
+        logger.error(f"Withdrawal not recorded (integrity): {e}")
+        return False
     except sqlite3.OperationalError as e:
         logger.error(f"Database error: {e}")
         return False
@@ -209,6 +221,9 @@ def record_withdrawal(db_path: str, withdrawal_data: Dict) -> bool:
     except Exception as e:
         logger.error(f"Failed to record withdrawal: {e}")
         return False
+    finally:
+        if conn is not None:
+            conn.close()
 
 def get_database_path(project_root: str) -> Optional[str]:
     """

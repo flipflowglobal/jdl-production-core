@@ -101,7 +101,49 @@ CREATE TABLE IF NOT EXISTS reconciliation_log (
 CREATE INDEX IF NOT EXISTS idx_reconciliation_chain ON reconciliation_log(chain);
 
 -- ─────────────────────────────────────────────────────────────────────────
--- 5. TRIGGERS: Auto-update revenue_summary on flash_trades INSERT
+-- 5. CHAIN HEALTH (RPC health-check results — written by chain_monitor_fixed.py)
+-- ─────────────────────────────────────────────────────────────────────────
+-- NOTE: chain_monitor_fixed.py also creates this table defensively with
+-- CREATE TABLE IF NOT EXISTS. The definition here is the canonical superset so
+-- that deploy_termux.sh initializes it up front and the two never drift.
+CREATE TABLE IF NOT EXISTS chain_health (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chain TEXT NOT NULL,                       -- 'ethereum', 'arbitrum', ...
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL,                       -- 'healthy', 'degraded', 'unreachable', 'unknown'
+    block_number INTEGER,
+    block_age_seconds REAL,
+    gas_price REAL,                            -- Gwei
+    peer_count INTEGER,
+    latency_ms REAL,
+    error_msg TEXT,
+    rpc_used TEXT DEFAULT 'primary'           -- 'primary' or 'backup'
+);
+
+CREATE INDEX IF NOT EXISTS idx_chain_health_chain ON chain_health(chain);
+CREATE INDEX IF NOT EXISTS idx_chain_health_timestamp ON chain_health(timestamp);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 6. RPC DIAGNOSTICS (Every RPC failure logged — no more silent "NO DATA")
+-- ─────────────────────────────────────────────────────────────────────────
+-- Also created defensively by chain_monitor_fixed.py; kept in sync here.
+CREATE TABLE IF NOT EXISTS rpc_diagnostics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chain TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    rpc_url TEXT,
+    http_status INTEGER,
+    response_time_ms REAL,
+    error_type TEXT,                           -- 'timeout', 'connection_error', 'json_decode_error', ...
+    error_msg TEXT,
+    test_method TEXT                           -- JSON-RPC method that was attempted
+);
+
+CREATE INDEX IF NOT EXISTS idx_rpc_diagnostics_chain ON rpc_diagnostics(chain);
+CREATE INDEX IF NOT EXISTS idx_rpc_diagnostics_timestamp ON rpc_diagnostics(timestamp);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 7. TRIGGERS: Auto-update revenue_summary on flash_trades INSERT
 -- ─────────────────────────────────────────────────────────────────────────
 
 -- Insert trigger: Create summary row if doesn't exist
@@ -154,7 +196,7 @@ BEGIN
 END;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- 6. HELPER VIEWS (For easy querying)
+-- 8. HELPER VIEWS (For easy querying)
 -- ─────────────────────────────────────────────────────────────────────────
 
 CREATE VIEW IF NOT EXISTS vw_profit_by_chain AS
