@@ -26,7 +26,7 @@ WHAT YOU NOW HAVE
     - Health checks: block number, gas price, latency
     - Optional daemon mode (continuous background)
 
-[4] deploy_revenue_system.sh
+[4] deploy_termux.sh
     - Auto-detects your projects (dl.2, aureon, flipflow, nexus-arb)
     - Initializes schema in all .db files
     - Copies scripts to each project
@@ -51,12 +51,12 @@ STEP 1: Copy all files to your Termux home
   # Copy revenue_schema.sql → ~/
   # Copy revenue_reconciliation.py → ~/
   # Copy chain_monitor_fixed.py → ~/
-  # Copy deploy_revenue_system.sh → ~/
+  # Copy deploy_termux.sh → ~/
 
 STEP 2: Run deployment script
 
   cd ~
-  bash deploy_revenue_system.sh
+  bash deploy_termux.sh
   
   # This will:
   # - Find all your projects (dl.2, aureon, etc.)
@@ -243,7 +243,7 @@ DEPLOYMENT TO UBUNTU (UserLAnd)
 Same as Termux, but in UserLAnd terminal:
 
   cd ~
-  bash deploy_revenue_system.sh
+  bash deploy_termux.sh
 
 Everything auto-detects and initializes.
 
@@ -285,7 +285,7 @@ A: Install dependencies:
 
 Q: "sqlite3.OperationalError: no such table: flash_trades"
 A: Schema not initialized. Run:
-   bash deploy_revenue_system.sh
+   bash deploy_termux.sh
 
 Q: "RPC connection timeout"
 A: Check internet. Script auto-tries backup RPC. Monitor logs:
@@ -357,6 +357,6 @@ AFTER:
 NEXT: Run the deployment script!
 
   cd ~
-  bash deploy_revenue_system.sh
+  bash deploy_termux.sh
 
 ════════════════════════════════════════════════════════════════════════════
