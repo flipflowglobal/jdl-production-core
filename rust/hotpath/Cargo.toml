@@ -3,7 +3,12 @@ name = "jdl-hotpath"
 version = "0.1.0"
 edition = "2021"
 description = "CPU hot-path for the JDL flash-loan system: fast arbitrage-cycle detection"
-license = "MIT"
+# Matches the repository-wide LICENSE (Business Source License 1.1). This crate
+# previously declared "MIT", which contradicted that file — the repo LICENSE
+# covers "the software and associated documentation files in this repository",
+# this crate included.
+license = "BUSL-1.1"
+publish = false
 
 # Two artifacts from one crate: a library (unit-testable core) and a CLI binary
 # the Node orchestration server spawns.

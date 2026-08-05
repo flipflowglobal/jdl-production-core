@@ -14,8 +14,8 @@ A self-contained **flash-loan arbitrage system for Arbitrum One**, built to run 
 - **CI** (`ci.yml`, on every push/PR) — four jobs gate merges: **python** (flash engine,
   swarm, wallet-lanes, native-binding test suites), **rust** (`cargo test` +
   `cargo clippy -D warnings` for `rust/hotpath`), **node** (`npm test`), and **solidity**
-  (Hardhat compile with solc 0.8.20; `continue-on-error` so a transient toolchain fetch
-  doesn't fail the pipeline).
+  (Hardhat compile with solc 0.8.20 — gating; plus the Arbitrum mainnet-fork test suite
+  as a non-gating step, since it forks from a public RPC that can rate-limit).
 - **Security** (`security.yml`, on push/PR + a weekly Monday cron) — advisory dependency
   audits (`pip-audit`, `cargo-audit`, `npm audit`) and Slither static analysis, none of
   which block merges. The exception is **secret-scan** (gitleaks), which gates on
@@ -51,7 +51,7 @@ any other tooling is installed directly via pip/cargo/npm/curl.
 │   · ArbitrageLib.sol — SwapStep + helpers          │
 │   · FlashZeroGas.sol — zero-upfront-gas variant    │
 │   · ProfitPaymaster.sol — EIP-4337 paymaster       │
-│   compiles 0/0 · mainnet-fork tested 7/7           │
+│   compiles 20 files · mainnet-fork tested 7/7      │
 ├──────────────────────────────────────────────────┤
 │   revenue_system/  —  on-chain revenue tracking    │
 │   python/flash_supervisor.py — auto-restart daemon │

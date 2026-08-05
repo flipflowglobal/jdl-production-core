@@ -1,4 +1,11 @@
-require("@nomicfoundation/hardhat-toolbox");
+// Plugins are required individually rather than via @nomicfoundation/hardhat-toolbox.
+// The toolbox is a meta-package whose `latest` tag (v7) is a deprecation stub that
+// works with neither Hardhat 2 nor 3 and exits non-zero on load; requiring only the
+// three plugins this project actually uses removes that whole class of breakage and
+// drops the unused typechain/ts-node/coverage/gas-reporter peer tree it pulls in.
+require("@nomicfoundation/hardhat-ethers");        // hre.ethers (deploy scripts + tests)
+require("@nomicfoundation/hardhat-chai-matchers"); // revertedWithCustomError in test/
+require("@nomicfoundation/hardhat-network-helpers");
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "0000000000000000000000000000000000000000000000000000000000000000";
 const ARB_RPC_URL = process.env.ARB_RPC_URL || "https://arb1.arbitrum.io/rpc";

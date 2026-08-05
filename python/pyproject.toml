@@ -7,6 +7,11 @@ name = "jdl-flash"
 version = "1.0.0"
 description = "Termux flash-loan arbitrage engine (Arbitrum One) with advanced math/ML toolkit"
 requires-python = ">=3.9"
+# Repository-wide license (Business Source License 1.1). Declared explicitly so
+# the built wheel/sdist carries it in its metadata instead of shipping with no
+# license at all — BSL requires the License be displayed on every copy.
+license = "BUSL-1.1"
+license-files = ["LICENSE"]
 # web3 6.x is the Termux-safe line: unlike 5.31.4 it uses eth-abi 4.x (compatible
 # parsimonious — no getargspec crash) and drops the ipfshttpclient→psutil dep that
 # fails to build on Android. Verified 79/79 tests + live deploy on web3 6.20.4.

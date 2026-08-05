@@ -7,7 +7,8 @@
 #   • python   — `jdl test`                     (blocking)
 #   • rust     — `cargo test` + `cargo clippy`  (blocking)
 #   • node     — `npm test`                     (blocking)
-#   • solidity — Hardhat compile (+ fork tests) (advisory — CI is continue-on-error)
+#   • solidity — Hardhat compile (blocking, mirrors CI) + fork tests (advisory:
+#     they fork from a public RPC that can rate-limit)
 #
 # Ideal on UserLAnd / Ubuntu / WSL / macOS (glibc), where the whole polyglot
 # stack runs. On Termux (Bionic libc) only the Python suite applies — Rust/Node/
@@ -122,17 +123,20 @@ else
     record "node" SKIP 1
 fi
 
-# ── 4. Solidity (advisory — mirrors CI continue-on-error) ───────────────
+# ── 4. Solidity compile (blocking — mirrors CI) ─────────────────────────
+# The compile is blocking here just as it is in ci.yml. It used to be advisory in
+# both places, which is how a dependency bump that broke `npm run compile` outright
+# stayed invisible: the command exited 1 on every run and nothing ever reported it.
 if [ "$QUICK" = "1" ]; then
     hdr "solidity — SKIPPED (--quick)"
     record "solidity (compile)" SKIP 0
 elif command -v npm >/dev/null 2>&1 && [ -f "$REPO_DIR/contracts/package.json" ]; then
     hdr "solidity — Hardhat compile"
     if ( cd "$REPO_DIR/contracts" && { npm ci || npm install; } && npm run compile ); then
-        record "solidity (compile)" PASS 0
+        record "solidity (compile)" PASS 1
     else
-        echo -e "  ${YELLOW}compile failed — advisory only (often a network/solc-download hiccup)${RESET}"
-        record "solidity (compile)" FAIL 0
+        echo -e "  ${RED}compile failed — this is a real build break, not a flake${RESET}"
+        record "solidity (compile)" FAIL 1
     fi
     if [ -n "${ARB_RPC_URL:-}" ]; then
         hdr "solidity — Hardhat mainnet-fork tests (ARB_RPC_URL set)"
@@ -171,8 +175,9 @@ i=0
 while [ "$i" -lt "${#R_NAME[@]}" ]; do
     name="${R_NAME[$i]}"; status="${R_STATUS[$i]}"; blocking="${R_BLOCKING[$i]}"
     # "non-blocking" (not "advisory"): a suite is non-blocking either because it's
-    # intrinsically advisory (solidity, mirrors CI continue-on-error) or because the
-    # user skipped it with --quick (e.g. node) — the tag must fit both cases.
+    # intrinsically advisory (the mainnet-fork suites, which depend on a reachable
+    # public RPC) or because the user skipped it with --quick (e.g. node) — the tag
+    # must fit both cases.
     tag=""; [ "$blocking" = "0" ] && tag=" ${DIM}(non-blocking)${RESET}"
     case "$status" in
         PASS) echo -e "  ${GREEN}✓ PASS${RESET}  $name$tag" ;;
