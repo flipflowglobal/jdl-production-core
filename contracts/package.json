@@ -2,13 +2,14 @@
   "name": "jdl-production-core",
   "version": "1.0.0",
   "description": "JDL Production Core — Solidity flash-loan arbitrage contracts (NexusFlashReceiver, ArbitrageLib, FlashZeroGas, ProfitPaymaster)",
-  "license": "UNLICENSED",
+  "license": "BUSL-1.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/flipflowglobal/jdl-production-core.git"
   },
   "files": [
-    "contracts"
+    "contracts",
+    "LICENSE"
   ],
   "scripts": {
     "compile": "npx hardhat compile",
@@ -20,22 +21,23 @@
     "deploy:ethereum": "npx hardhat run scripts/deploy-flash-receiver.js --network ethereum"
   },
   "devDependencies": {
-    "@nomicfoundation/hardhat-chai-matchers": "^3.0.0",
-    "@nomicfoundation/hardhat-ethers": "^4.0.14",
-    "@nomicfoundation/hardhat-network-helpers": "^3.0.11",
-    "@nomicfoundation/hardhat-toolbox": "^7.0.0",
-    "chai": "^6.2.2",
+    "@nomicfoundation/hardhat-chai-matchers": "^2.1.0",
+    "@nomicfoundation/hardhat-ethers": "^3.1.3",
+    "@nomicfoundation/hardhat-network-helpers": "^1.1.0",
+    "chai": "^4.2.0",
     "ethers": "^6.17.0",
-    "hardhat": "^3.11.1"
+    "hardhat": "^2.29.0"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.6.1"
   },
   "overrides": {
     "adm-zip": ">=0.6.0",
+    "cookie": ">=0.7.0",
     "serialize-javascript": ">=7.0.5",
     "tmp": ">=0.2.6",
     "undici": ">=6.27.0 <7",
+    "uuid": ">=11.1.1",
     "ws": ">=8.21.0"
   }
 }

@@ -78,10 +78,14 @@ jobs:
     name: Solidity contracts
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # continue-on-error: Hardhat downloads the solc 0.8.20 binary and resolves
-    # OpenZeppelin imports at compile time; if the network fetch or a peer-dep
-    # resolution hiccups in CI we don't want it to fail the whole pipeline.
-    continue-on-error: true
+    # This job is GATING. It was previously continue-on-error to tolerate a
+    # transient solc-download/peer-resolution hiccup, but that also silently hid
+    # a hard build break: a dependency bump pulled in hardhat-toolbox v7 (a
+    # deprecation stub that loads under neither Hardhat 2 nor 3) and `npm run
+    # compile` exited 1 on every run without ever failing the pipeline. A
+    # genuinely flaky compile is worth a re-run; an invisible broken build in the
+    # component that moves funds is not. The fork-test step below is the one part
+    # left non-gating, because it reaches a public RPC endpoint.
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -95,3 +99,16 @@ jobs:
       - name: Compile contracts (Hardhat + solc 0.8.20)
         working-directory: contracts
         run: npm run compile
+      # Mainnet-fork tests against Arbitrum One. These exercise the real
+      # crypto-moving path (Aave flashLoanSimple → Uniswap swaps →
+      # profit-or-revert) with no broadcast and no real funds. Kept
+      # non-gating at the step level because it forks from a public RPC
+      # (ARB_RPC_URL secret if set, else arb1.arbitrum.io) which can rate-limit;
+      # the compile step above is what gates. Uses the same command a
+      # developer runs locally.
+      - name: Mainnet-fork tests (advisory — depends on a public RPC)
+        working-directory: contracts
+        continue-on-error: true
+        env:
+          ARB_RPC_URL: ${{ secrets.ARB_RPC_URL }}
+        run: npm test

@@ -61,6 +61,23 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # Hardhat 3 is a breaking rewrite: ESM-only config, a different config
+    # schema (plugins array, typed networks) and a different toolbox package.
+    # An automated major bump to the 3.x line silently broke the contract build
+    # once already, so majors here are a deliberate, human-run migration rather
+    # than a Dependabot PR. Minor/patch updates within the 2.x line still flow
+    # normally via the group above.
+    ignore:
+      - dependency-name: "hardhat"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@nomicfoundation/hardhat-ethers"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@nomicfoundation/hardhat-chai-matchers"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@nomicfoundation/hardhat-network-helpers"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "chai"
+        update-types: ["version-update:semver-major"]
     labels:
       - "dependencies"
       - "contracts"
