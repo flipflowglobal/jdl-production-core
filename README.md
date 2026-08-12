@@ -40,6 +40,8 @@ any other tooling is installed directly via pip/cargo/npm/curl.
 ┌──────────────────────────────────────────────────┐
 │   python/jdl_flash/  —  Termux engine (package)    │
 │   flash_loan_engine.py  · terminal UI, scan/exec   │
+│   config.py      · typed, validating env readers   │
+│   risk_limits.py · pre-trade risk governor         │
 │   + advanced toolkit (real quotes only):           │
 │     advanced_math · pattern_recognition            │
 │     market_analysis · prediction · loan_optimizer  │
@@ -266,12 +268,51 @@ remappings = [
 | `bash scripts/push_revenue_system.sh` | Push revenue-system files to a deployment target |
 | `powershell -File scripts/setup.ps1` | Native Windows dependency installer (used by `jdl install`) |
 
+## Risk controls
+
+Flash loans are atomic, so an unprofitable route reverts on-chain and the
+principal is never at risk. What that guarantee does *not* cover is gas: every
+reverting broadcast still costs it, and a route broken for a systemic reason (a
+stale contract address, a drained pool, an RPC serving wrong state) reverts on
+every cycle. Unattended — which is the point of `jdl swarm` under
+`flash_supervisor` — that is thousands of gas-burning attempts a day with
+nothing to notice or stop it.
+
+`risk_limits.py` sits between "edge found" and "transaction signed", on both the
+interactive daemon and the swarm path:
+
+| Control | Env var | Default | Behaviour |
+|---------|---------|---------|-----------|
+| Circuit breaker | `MAX_CONSECUTIVE_FAILURES` | 3 | N consecutive failed broadcasts pause execution; one success closes it |
+| Breaker cooldown | `RISK_COOLDOWN_SEC` / `RISK_COOLDOWN_MAX_SEC` | 60s / 3600s | Doubles per further failure, capped |
+| Daily loss cap | `MAX_DAILY_LOSS_USD` | 25 | Halts for the rest of the UTC day once realised P&L is that far down |
+| Per-trade ceiling | `MAX_LOAN_USD` | 500000 | No single loan exceeds it |
+| Profit floor | `MIN_PROFIT_USD` | 0.50 | Enforced in the swarm's hot-path filter *and* re-checked at the gate |
+| Kill switch | `HALT_FILE` | `~/.flash_loan_engine/HALT` | `touch` to halt, `rm` to resume — no signal, no restart |
+
+Two properties make these real rather than decorative:
+
+* **State is persisted in SQLite, not memory.** `flash_supervisor.py` restarts the
+  engine on crash; an in-memory breaker would reset on every restart, so the one
+  case that most needs the cap — a crash-looping bot — would bypass it entirely.
+* **Failures are ledgered.** `executions` only ever recorded *successful* trades,
+  so gas burned on failures was invisible to every revenue figure. `risk_events`
+  records every attempt (success, failure, blocked), giving a true cost basis.
+
+Config parsing fails closed alongside them: a malformed value (`MIN_PROFIT_USD=0.o1`)
+no longer aborts the import of `flash_loan_engine` — and with it every `jdl`
+command — but it does disable live execution until fixed, while leaving scanning
+and reporting fully usable. `jdl status` shows the current posture and any
+malformed values; see `config.py`.
+
 ## Tests
 
 | Suite | Command | Result |
 |-------|---------|--------|
 | **Full suite (all languages, mirrors CI)** | `bash scripts/run-all-tests.sh` | python + rust + node + solidity |
 | Python engine | `python3 -m jdl_flash.test_flash_engine` | 79/79 |
+| Config readers | `python3 jdl_flash/test_config.py` | 62/62 |
+| Risk governor | `python3 jdl_flash/test_risk_limits.py` | 62/62 |
 | Python (everything — same as CI) | `jdl test` | all suites |
 | Contracts (Foundry) | `forge test` | 7/7 fork |
 | Contracts (Hardhat) | `npm run test:fork` | 7/7 fork |
