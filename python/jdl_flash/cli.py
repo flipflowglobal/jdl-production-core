@@ -33,6 +33,8 @@ _PACKAGED_TESTS = [
     "test_swarm_wiring.py",
     "test_swarm_daemon.py",
     "test_config_validation.py",
+    "test_config.py",
+    "test_risk_limits.py",
     "test_revenue_reconciliation.py",
     "test_env_autowire.py",
     "test_platform_detect.py",
@@ -253,6 +255,39 @@ def cmd_integrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_risk_status() -> None:
+    """Risk posture: why the bot is or isn't currently allowed to execute.
+
+    This is the first question an operator asks when a running daemon stops
+    trading, and without it the risk gate would be an invisible black box —
+    a bot silently refusing every opportunity looks identical to a bot finding
+    none. Best-effort: a status command must never fail because of it.
+    """
+    try:
+        from jdl_flash import flash_loan_engine as engine
+
+        for line in engine.CONFIG_ISSUES:
+            print(f"  ⚠ config:          {line}")
+
+        risk = engine.build_risk_governor().status()
+        state = "EXECUTING" if risk["executing"] else f"BLOCKED ({risk['block_code']})"
+        print(f"  Risk gate:         {state}")
+        if not risk["executing"]:
+            print(f"    reason:          {risk['block_reason']}")
+        cooldown = risk["cooldown_remaining_s"]
+        cooldown_note = f"  (cooldown {cooldown:.0f}s remaining)" if cooldown else ""
+        print(f"    failure streak:  {risk['consecutive_failures']}"
+              f"/{risk['max_consecutive_failures']}{cooldown_note}")
+        print(f"    today ({risk['day']}): {risk['today_successes']} ok · "
+              f"{risk['today_failures']} failed · {risk['today_blocked']} blocked · "
+              f"${risk['today_gas_usd']:,.2f} gas")
+        print(f"    daily P&L:       ${risk['daily_net_usd']:,.2f} "
+              f"(loss cap ${risk['max_daily_loss_usd']:,.2f})")
+        print(f"    kill switch:     {'ENGAGED — ' if risk['halted'] else 'clear — '}{risk['halt_file']}")
+    except Exception as exc:  # pragma: no cover - diagnostics only
+        print(f"  Risk gate:         unavailable ({exc})")
+
+
 def cmd_status(_args: argparse.Namespace) -> int:
     fs = _load_flash_supervisor()
     tot = fs.total_profit()
@@ -263,6 +298,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
     print(f"  Executions:        {ex}")
     print(f"  Revenue:           ${tot:,.2f} / ${fs.THRESHOLD:,.0f} withdrawal threshold")
     print(f"  Data dir:          {fs.DATA_DIR}")
+    _print_risk_status()
     return 0
 
 

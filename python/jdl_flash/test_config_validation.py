@@ -27,6 +27,12 @@ def main():
         e.LIVE_EXEC = False
         e.PRIV_KEY = ""
         e.GELATO_ENABLED = False
+        # Malformed-env issues are collected at import time from the real
+        # environment (see config.py). Clear them so these cases exercise
+        # validate_env_config()'s own logic rather than whatever the machine
+        # running the tests happens to have in its .env — the parsing of those
+        # values is covered by test_config.py instead.
+        e.CONFIG_ISSUES = []
 
     # ── clean config -> no warnings ──
     reset()

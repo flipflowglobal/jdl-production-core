@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import signal
 import sys
 
@@ -52,8 +51,16 @@ async def run_forever(engine_module=None, coordinator_factory=None) -> int:
         from jdl_flash import flash_loan_engine as engine_module  # noqa: PLC0415
     from jdl_flash import swarm_runtime as sr  # noqa: PLC0415
 
-    batch_rounds = max(1, int(os.getenv("SWARM_BATCH_ROUNDS", "30")))
-    interval = max(0.0, float(os.getenv("SWARM_INTERVAL", "1.0")))
+    # Typed readers rather than bare int()/float(): a typo in SWARM_BATCH_ROUNDS
+    # used to raise out of run_forever and kill the daemon the supervisor had
+    # just restarted, producing a restart loop with no useful log line. Now it
+    # falls back to the documented default and reports the bad value. See config.py.
+    from jdl_flash.config import env_float, env_int, issue_lines  # noqa: PLC0415
+
+    batch_rounds = env_int("SWARM_BATCH_ROUNDS", default=30, minimum=1)
+    interval = env_float("SWARM_INTERVAL", default=1.0, minimum=0.0)
+    for line in issue_lines():
+        log.warning(f"config: {line}")
 
     feed = engine_module.PriceFeed()
     if coordinator_factory is not None:
