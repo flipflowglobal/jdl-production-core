@@ -98,6 +98,13 @@ CREATE TABLE IF NOT EXISTS risk_state (
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILURE = "failure"
 OUTCOME_BLOCKED = "blocked"
+# A trade the engine declined to broadcast at all — most often the pre-flight
+# eth_call simulation showing the route would revert. Nothing reached the chain,
+# so no gas was spent. Kept distinct from OUTCOME_FAILURE because conflating the
+# two is actively harmful: skips are the *normal* result in an efficient market,
+# and charging them gas would trip the breaker every few cycles and reach the
+# daily cap within an hour of ordinary scanning.
+OUTCOME_SKIPPED = "skipped"
 
 _KEY_CONSECUTIVE = "consecutive_failures"
 _KEY_COOLDOWN_UNTIL = "cooldown_until"
@@ -169,6 +176,10 @@ class RiskGovernor:
         # be atomic. Without this, two lanes failing at once can each read the
         # same streak and the breaker trips one failure late, every time.
         self._lock = threading.RLock()
+        # Last block code written to risk_events, so a sustained halt collapses
+        # to one row instead of one per refused opportunity. Cleared as soon as
+        # check() allows again, so the *next* halt is recorded afresh.
+        self._last_blocked_code: Optional[str] = None
         # A ":memory:" database is per-connection, so tests that use it need the
         # one connection to stay open for state to persist across calls.
         self._shared: Optional[sqlite3.Connection] = (
@@ -334,6 +345,13 @@ class RiskGovernor:
     # ── write-side ──────────────────────────────────────────────────────────
 
     def _record(self, outcome: str, net_usd: float, gas_usd: float, detail: str) -> None:
+        # Any non-blocked outcome means the gate let something through, so the
+        # current halt (if any) is over and the next block starts a fresh row.
+        # Deliberately keyed off recorded activity rather than off check()
+        # returning allowed: status() calls check(), and a reporting method must
+        # never mutate the state it reports on.
+        if outcome != OUTCOME_BLOCKED:
+            self._last_blocked_code = None
         ts = self.clock()
         with self._connect() as con:
             con.execute(
@@ -376,7 +394,14 @@ class RiskGovernor:
             # base, the 2nd 2*base, the 3rd 4*base … so a systemically broken
             # route backs off toward the cap instead of retrying at cycle speed
             # forever.
-            over = failures - self.max_consecutive_failures
+            #
+            # `over` is clamped before exponentiation, not after: 2.0 ** 1024
+            # raises OverflowError, and it would do so *after* the streak was
+            # already committed to the database — leaving a long-running broken
+            # route with an incremented counter and no armed cooldown, i.e. the
+            # breaker permanently disabled. 64 doublings is already far past
+            # cooldown_max_s, so the clamp changes nothing observable.
+            over = min(failures - self.max_consecutive_failures, 64)
             cooldown = min(self.cooldown_base_s * (2.0 ** over), self.cooldown_max_s)
             self._set_state(_KEY_COOLDOWN_UNTIL, self.clock() + cooldown)
             return RiskDecision(
@@ -387,9 +412,34 @@ class RiskGovernor:
                 retry_after_s=cooldown,
             )
 
-    def record_blocked(self, decision: RiskDecision) -> None:
-        """Audit-log a trade this governor refused, for after-the-fact review."""
+    def record_skip(self, detail: str = "") -> None:
+        """Log an opportunity the engine declined to broadcast.
+
+        Nothing reached the chain, so this costs no gas, does not count toward
+        the daily loss cap, and does **not** advance the circuit breaker. The row
+        exists purely so the skip rate is visible next to the executions.
+
+        This is the common case in an efficient market — the pre-flight
+        simulation showing a route would revert — and treating it as a failure
+        would stop the bot trading within minutes of ordinary scanning.
+        """
         with self._lock:
+            self._record(OUTCOME_SKIPPED, 0.0, 0.0, detail)
+
+    def record_blocked(self, decision: RiskDecision) -> None:
+        """Audit-log a trade this governor refused, for after-the-fact review.
+
+        Consecutive blocks carrying the same code collapse to a single row. A
+        halt is not a moment but a state — an open cooldown or a tripped daily
+        cap keeps refusing every opportunity found, once per scan cycle per
+        worker, for as long as it lasts. Writing one row each would add tens of
+        thousands of identical rows to the shared database during a single
+        day-long halt while telling the operator nothing the first row didn't.
+        """
+        with self._lock:
+            if decision.code == self._last_blocked_code:
+                return
+            self._last_blocked_code = decision.code
             self._record(OUTCOME_BLOCKED, 0.0, 0.0, f"{decision.code}: {decision.reason}")
 
     def reset_breaker(self) -> None:
@@ -410,11 +460,12 @@ class RiskGovernor:
                 "  COALESCE(SUM(outcome = ?), 0), "
                 "  COALESCE(SUM(outcome = ?), 0), "
                 "  COALESCE(SUM(outcome = ?), 0), "
+                "  COALESCE(SUM(outcome = ?), 0), "
                 "  COALESCE(SUM(gas_usd), 0.0) "
                 "FROM risk_events WHERE day = ?",
-                (OUTCOME_SUCCESS, OUTCOME_FAILURE, OUTCOME_BLOCKED, day),
+                (OUTCOME_SUCCESS, OUTCOME_FAILURE, OUTCOME_BLOCKED, OUTCOME_SKIPPED, day),
             ).fetchone()
-        successes, failures, blocked, gas = row if row else (0, 0, 0, 0.0)
+        successes, failures, blocked, skipped, gas = row if row else (0, 0, 0, 0, 0.0)
         return {
             "day": day,
             "executing": decision.allowed,
@@ -433,5 +484,6 @@ class RiskGovernor:
             "today_successes": int(successes),
             "today_failures": int(failures),
             "today_blocked": int(blocked),
+            "today_skipped": int(skipped),
             "today_gas_usd": float(gas),
         }

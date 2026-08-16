@@ -35,6 +35,7 @@ _PACKAGED_TESTS = [
     "test_config_validation.py",
     "test_config.py",
     "test_risk_limits.py",
+    "test_gelato_relay.py",
     "test_revenue_reconciliation.py",
     "test_env_autowire.py",
     "test_platform_detect.py",
@@ -279,8 +280,8 @@ def _print_risk_status() -> None:
         print(f"    failure streak:  {risk['consecutive_failures']}"
               f"/{risk['max_consecutive_failures']}{cooldown_note}")
         print(f"    today ({risk['day']}): {risk['today_successes']} ok · "
-              f"{risk['today_failures']} failed · {risk['today_blocked']} blocked · "
-              f"${risk['today_gas_usd']:,.2f} gas")
+              f"{risk['today_failures']} failed · {risk['today_skipped']} skipped · "
+              f"{risk['today_blocked']} blocked · ${risk['today_gas_usd']:,.2f} gas")
         print(f"    daily P&L:       ${risk['daily_net_usd']:,.2f} "
               f"(loss cap ${risk['max_daily_loss_usd']:,.2f})")
         print(f"    kill switch:     {'ENGAGED — ' if risk['halted'] else 'clear — '}{risk['halt_file']}")

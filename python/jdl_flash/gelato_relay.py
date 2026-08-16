@@ -186,13 +186,28 @@ def task_status(task_id: str, session=None) -> Tuple[str, Optional[str]]:
         return "Unknown", None
 
 
+TERMINAL_STATES = frozenset({"ExecSuccess", "ExecReverted", "Cancelled", "Blacklisted"})
+
+# Returned when polling gives up before Gelato reached a terminal state. This is
+# NOT a failure and must never be treated as one: the task remains executable on
+# Gelato's side for up to 24h, so the trade may still land on-chain long after we
+# stopped watching. Callers that treat a timeout as "did not execute" will both
+# under-record revenue and, if they resubmit, race the abandoned task for the
+# same userNonce.
+STATE_TIMEOUT = "PollTimeout"
+
+
 def wait_for_task(task_id: str, *, poll_fn, sleep_fn, max_polls: int = 40) -> Tuple[str, Optional[str]]:
-    """Poll until terminal state. poll_fn(task_id)->(state,tx); sleep_fn(sec) injected."""
-    terminal = {"ExecSuccess", "ExecReverted", "Cancelled", "Blacklisted"}
+    """Poll until a terminal state, or STATE_TIMEOUT if we give up first.
+
+    Returns (state, tx_hash). `state` is one of TERMINAL_STATES or STATE_TIMEOUT
+    — never a transient state like CheckPending, which callers could not
+    distinguish from a genuine failure.
+    """
     state, tx = "CheckPending", None
     for _ in range(max_polls):
         state, tx = poll_fn(task_id)
-        if state in terminal:
+        if state in TERMINAL_STATES:
             return state, tx
         sleep_fn(3)
-    return state, tx
+    return STATE_TIMEOUT, tx

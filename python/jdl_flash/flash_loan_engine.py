@@ -252,16 +252,11 @@ RISK_COOLDOWN_MAX_SEC = env_float('RISK_COOLDOWN_MAX_SEC', default=3600.0, minim
 MAX_DAILY_LOSS_USD    = env_float('MAX_DAILY_LOSS_USD', default=25.0, minimum=0.0)
 # Operator kill switch: `touch` this path to halt execution without signals or a
 # redeploy, `rm` it to resume. Checked before every broadcast.
-HALT_FILE = _env('HALT_FILE', default='') or None
-
-# ── Fail closed on unparseable config ───────────────────────────────────────
-# A config the engine could not fully read is a config it must not trade on.
-# Read-only paths (scanning, `jdl status`, the test suite) stay fully usable so
-# the operator can see and fix the problem; only broadcasting is disabled.
-CONFIG_ISSUES = _config.issue_lines()   # operator-facing, empty when config is clean
-CONFIG_OK = _config.ok()
-if not CONFIG_OK and LIVE_EXEC:
-    LIVE_EXEC = False
+# expanduser: the templates document this with a leading `~`, and Path('~/x')
+# does NOT expand it — Path.exists() would then be False forever and the kill
+# switch would silently never engage, which is the worst possible way for an
+# emergency stop to fail.
+HALT_FILE = os.path.expanduser(_env('HALT_FILE', default='')) or None
 
 
 def validate_env_config() -> list:
@@ -303,6 +298,22 @@ def validate_env_config() -> list:
 # capture the largest real profit a pool will fill. Small-revenue mode is just a
 # low MIN_PROFIT_USD + small REAL_LOAN_USD. Both use real quotes only.
 MAXIMISE_REVENUE = env_bool('MAXIMISE_REVENUE', 'MAX_REVENUE', default=False)
+
+# ── Fail closed on unparseable config ───────────────────────────────────────
+# A config the engine could not fully read is a config it must not trade on.
+# Read-only paths (scanning, `jdl status`, the test suite) stay fully usable so
+# the operator can see and fix the problem; only broadcasting is disabled.
+#
+# This snapshot MUST come after every env_*() call in this module. It previously
+# sat next to the risk limits above, which left MAXIMISE_REVENUE — parsed here,
+# further down — outside the contract entirely: `MAXIMISE_REVENUE=ture
+# LIVE_EXECUTION=1` produced CONFIG_OK=True, an empty CONFIG_ISSUES, a silent
+# validate_env_config(), and live execution enabled, while config.ok() was
+# False. Any env_*() call added below this line reopens that hole.
+CONFIG_ISSUES = _config.issue_lines()   # operator-facing, empty when config is clean
+CONFIG_OK = _config.ok()
+if not CONFIG_OK and LIVE_EXEC:
+    LIVE_EXEC = False
 
 # Uniswap V3 QuoterV2 (same canonical address on Arbitrum/Ethereum/Optimism/Polygon)
 QUOTER_V2 = '0x61fFE014bA17989E743c5F6cB21bF9697530B21e'
@@ -1383,6 +1394,19 @@ class GelatoExecutor:
             if state == 'ExecSuccess' and tx:
                 logging.info(f'GelatoExecutor: ExecSuccess {tx}')
                 return tx
+            if state == gr.STATE_TIMEOUT:
+                # We stopped watching; Gelato did not stop working. The task stays
+                # executable for ~24h, so this trade may still land on-chain with
+                # no revenue row against it. Resubmitting would race the abandoned
+                # task for the same userNonce, so we deliberately do not retry —
+                # the reconciler (revenue_reconciliation.py) is what recovers the
+                # trade if it does execute. Logged at WARNING because an operator
+                # needs to know a trade is in an unknown state.
+                logging.warning(
+                    f'GelatoExecutor: task {task_id} still pending after polling gave up — '
+                    f'it may yet execute on-chain. NOT resubmitting (would race the same '
+                    f'userNonce); reconcile revenue from chain rather than from this run.')
+                return None
             logging.info(f'GelatoExecutor: task {task_id} ended {state}')
             return None
         except Exception as e:
@@ -1522,13 +1546,22 @@ class FlashDaemon:
                     self.blocked += 1
                     mode = 'BLOCKED'
                 else:
+                    # True once something has actually been put on the wire, so a
+                    # route the executor declined (costing nothing) is never
+                    # confused with a broadcast that failed (costing gas).
+                    broadcast = False
                     if strategy == 'FLASHBOTS_PEG' and CHAIN_ID == 1:
                         tx_hash = self.peg.submit(opp, eth_p)
+                        broadcast = bool(tx_hash)
                     elif GELATO_ENABLED:
                         # Gasless: Gelato pays gas from profit and only returns a tx
                         # once it has waited for ExecSuccess, so the hash is already
                         # an on-chain-confirmed execution.
                         tx_hash = self.gelato_exec.send(opp)
+                        # Gelato only returns a hash after ExecSuccess, so a hash
+                        # here means executed and a None means Gelato never got
+                        # it on-chain (and charged no fee).
+                        broadcast = bool(tx_hash)
                     else:
                         tx_hash = self.nexus.send(opp)       # real on-chain broadcast (owner pays gas)
                         # Real-data-only fix: a broadcast hash is NOT proof of success —
@@ -1538,22 +1571,39 @@ class FlashDaemon:
                         # is recorded. (profit_usd remains the PROJECTED quote-time
                         # figure pending on-chain reconciliation — see
                         # revenue_reconciliation.py.)
+                        broadcast = bool(tx_hash)
                         if tx_hash and _receipt_status(tx_hash) != 1:
                             logging.warning(f'cycle: broadcast {tx_hash} did not confirm '
                                             f'status==1 — not recording revenue')
                             tx_hash = None
-                    mode = 'LIVE' if tx_hash else 'FAILED'
-                    # Ledger both outcomes. A failure still cost gas, so it counts
-                    # against the daily cap and advances the breaker; a success
-                    # closes the breaker.
+                    mode = 'LIVE' if tx_hash else ('FAILED' if broadcast else 'SKIPPED')
+                    # Ledger the outcome. The distinction that matters is whether
+                    # anything actually reached the chain:
+                    #
+                    #   broadcast + confirmed  -> success, closes the breaker
+                    #   broadcast, not confirmed -> failure; gas was spent, so it
+                    #       counts against the daily cap and advances the breaker
+                    #   never broadcast -> skip; costs nothing, touches neither
+                    #
+                    # That last case is the one worth being careful about. send()
+                    # returns None when its pre-flight eth_call shows the route
+                    # would revert — which in an efficient market is the *normal*
+                    # outcome, many times an hour. Charging those the estimated
+                    # gas and advancing the breaker (as this did originally) would
+                    # trip it every three cycles and reach MAX_DAILY_LOSS_USD
+                    # within the hour, on a bot that had spent nothing at all.
                     if tx_hash:
                         self.risk.record_success(opp.profit_usd, gas_usd, tx_hash)
-                    else:
+                    elif broadcast:
                         tripped = self.risk.record_failure(
-                            gas_usd, f'{strategy} {opp.type} {opp.asset}')
+                            gas_usd, f'{strategy} {opp.type} {opp.asset} — broadcast unconfirmed')
                         if not tripped.allowed:
                             print(f"  {C.RED}  ⏸ {tripped.reason}{C.RESET}")
                             logging.warning(f'risk: {tripped.reason}')
+                    else:
+                        self.risk.record_skip(
+                            f'{strategy} {opp.type} {opp.asset} — not broadcast '
+                            f'(pre-flight simulation or executor declined)')
             elif CONTRACT and WEB3_OK and not LIVE_EXEC:
                 build_initiate_calldata(opp)                 # prove calldata path, never broadcast
                 mode = 'DRY'
@@ -1564,7 +1614,7 @@ class FlashDaemon:
             # are never written as revenue on mainnet (real-data-only). Sepolia
             # (ALLOW_SIM) may record testnet results for end-to-end testing.
             record = ((mode == 'LIVE' and tx_hash)
-                      or (ALLOW_SIM and mode not in ('FAILED', 'BLOCKED')))
+                      or (ALLOW_SIM and mode not in ('FAILED', 'BLOCKED', 'SKIPPED')))
             if record:
                 net = RevenueTracker.log(
                     opp.type, strategy, opp.asset,
@@ -1584,6 +1634,9 @@ class FlashDaemon:
             elif mode == 'FAILED':
                 self.errors += 1
                 print(f"  {C.RED}  ✗ broadcast failed{C.RESET}  {strategy}")
+            elif mode == 'SKIPPED':
+                print(f"  {C.DIM}  • not broadcast — pre-flight simulation says this "
+                      f"route would revert (no gas spent){C.RESET}")
             elif mode == 'DRY':
                 print(f"  {C.BYELLOW}  • DRY-RUN{C.RESET} real edge · calldata built · not broadcast — "
                       f"{C.DIM}not recorded as revenue{C.RESET}")
@@ -2105,7 +2158,16 @@ def build_live_coordinator(feed: 'PriceFeed', loan_usd: float, execute: bool):
                                 fallback_key=PRIV_KEY, fallback_contract=CONTRACT)
     except wl.LaneConfigError as e:
         logging.warning(f'swarm lane config error, falling back to single wallet: {e}')
-        lanes = wl.build_lanes('', '', fallback_key=PRIV_KEY, fallback_contract=CONTRACT)
+        try:
+            lanes = wl.build_lanes('', '', fallback_key=PRIV_KEY, fallback_contract=CONTRACT)
+        except wl.LaneConfigError as fallback_err:
+            # The single-wallet fallback is unusable too (typically PRIVATE_KEY
+            # set with no FLASH_CONTRACT_ADDRESS). Scanning must still work — the
+            # coordinator is built for dry runs as well as live ones — so carry
+            # on with no lanes, which leaves execute_fn None and the swarm in
+            # observe-only mode rather than aborting the whole daemon.
+            logging.warning(f'no usable execution lane, scanning only: {fallback_err}')
+            lanes = []
     n_wallets = max(1, len(lanes))
 
     execute_fn = None
@@ -2165,7 +2227,11 @@ def build_live_coordinator(feed: 'PriceFeed', loan_usd: float, execute: bool):
                     tx_hash = executor.send(o, priv_key=lane.priv_key,
                                             contract=lane.contract)
             if not tx_hash:
-                risk.record_failure(gas_usd, f'SWARM {"→".join(path)} broadcast returned no hash')
+                # Nothing reached the chain (pre-flight simulation refused it, or
+                # the executor declined) — no gas spent, so this is a skip, not a
+                # breaker-tripping failure. See cycle_run for why the distinction
+                # matters: reverting routes are the normal case, not an incident.
+                risk.record_skip(f'SWARM {"→".join(path)} not broadcast')
                 return None
             # Real-data-only audit trail (mirrors cycle_run): a broadcast hash is
             # not proof of success. Gelato already waited for ExecSuccess; the
@@ -2175,12 +2241,18 @@ def build_live_coordinator(feed: 'PriceFeed', loan_usd: float, execute: bool):
             if not GELATO_ENABLED and _receipt_status(tx_hash) != 1:
                 risk.record_failure(gas_usd, f'SWARM {tx_hash} did not confirm status==1')
                 return None
-            risk.record_success(o.profit_usd, gas_usd, tx_hash)
+            # `net_profit_usd` from the Rust hot path is ALREADY net of gas
+            # (rust/hotpath/src/lib.rs: gross_gain - premium - gas_usd), whereas
+            # both ledgers below subtract gas themselves. Add it back so gas is
+            # charged exactly once and this caller agrees with cycle_run, which
+            # passes a pre-gas figure.
+            gross_profit_usd = o.profit_usd + gas_usd
+            risk.record_success(gross_profit_usd, gas_usd, tx_hash)
             # profit_usd is the PROJECTED quote-time figure pending on-chain
             # reconciliation (revenue_reconciliation.py).
             try:
                 RevenueTracker.log('SWARM', 'SWARM', o.asset, o.loan_usd,
-                                   o.profit_usd, gas_usd, tx_hash, 1)
+                                   gross_profit_usd, gas_usd, tx_hash, 1)
             except Exception as _log_err:
                 logging.warning(f'swarm revenue log failed: {_log_err}')
             return tx_hash

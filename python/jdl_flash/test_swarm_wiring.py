@@ -177,6 +177,39 @@ def main():
     asyncio.run(swarm6.run(rounds=2, interval=0.0))
     check(len(calls) >= 1, "a permissive governor lets the same route through (the block was the gate, not the fake)")
 
+    # ── 5) a route the executor declines is a SKIP, not a gas-burning failure ──
+    # An executor returning None means the pre-flight simulation refused the
+    # route — nothing reached the chain, nothing was spent. Counting those as
+    # failures would trip the breaker every few cycles in an efficient market
+    # and halt a bot that had cost its operator nothing.
+    shared = RiskGovernor(db_path=":memory:", max_consecutive_failures=3,
+                          max_daily_loss_usd=25.0, max_notional_usd=10**9,
+                          min_profit_usd=0.0, config_ok=True)
+
+    class DecliningExecutor:
+        """Stands in for a NexusExecutor whose pre-flight simulation reverts."""
+        def send(self, opp, priv_key=None, contract=None):
+            calls.append((priv_key, contract))
+            return None
+
+    calls.clear()
+    e.NexusExecutor = DecliningExecutor
+    e.build_risk_governor = lambda: shared
+    coord7 = e.build_live_coordinator(feed=None, loan_usd=10000.0, execute=True)
+    swarm7 = coord7.make_swarm(n_workers=2)
+    for _ in range(6):
+        coord7.reset_dedup()
+        asyncio.run(swarm7.run(rounds=2, interval=0.0))
+
+    check(len(calls) >= 4, f"the declining executor was actually reached (got {len(calls)})")
+    check(shared.consecutive_failures() == 0, "declined routes never advance the failure streak")
+    check(shared.daily_loss_usd() == 0.0, "declined routes cost nothing — no gas was spent")
+    check(shared.check(10_000.0, 5.0).allowed, "the breaker stays closed through repeated declines")
+    check(shared.status()["today_skipped"] >= 4, "declined routes are still logged as skips")
+    check(shared.status()["today_failures"] == 0, "declined routes are not logged as failures")
+
+    e.NexusExecutor = FakeExecutor  # restore for any later case
+
     print(f"\nResults: {passed}/{passed + failed} passed")
     return 0 if failed == 0 else 1
 

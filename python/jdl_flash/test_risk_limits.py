@@ -227,12 +227,73 @@ def main():
     check(g.consecutive_failures() == 50, "50 concurrent failures are all counted (no lost updates)")
     check(abs(g.daily_loss_usd() - 0.50) < 1e-6, "concurrent gas costs all land in the ledger")
 
+    # ── skips: the normal case, and they must cost nothing ───────────────────
+    # A route whose pre-flight simulation says it would revert never reaches the
+    # chain. Treating those as failures would trip the breaker every few cycles
+    # and reach the daily cap within the hour, on a bot that spent nothing.
+    g = gov(max_consecutive_failures=3, max_daily_loss_usd=25.0)
+    for _ in range(500):
+        g.record_skip("simulation would revert")
+    check(g.consecutive_failures() == 0, "500 skips never advance the failure streak")
+    check(g.daily_loss_usd() == 0.0, "skips add no loss — no gas was spent")
+    check(g.check(10_000.0, 5.0).allowed, "the breaker stays closed through a long skip run")
+    check(g.status()["today_skipped"] == 500, "skips are still counted for visibility")
+
+    # A skip must not reset a real failure streak either — otherwise one skip
+    # between two reverts would keep the breaker permanently disarmed.
+    g = gov(max_consecutive_failures=3)
+    g.record_failure(0.10)
+    g.record_skip("simulation would revert")
+    g.record_failure(0.10)
+    check(g.consecutive_failures() == 2, "a skip between failures does not reset the streak")
+
+    # ── breaker cooldown cannot overflow ─────────────────────────────────────
+    # 2.0 ** 1024 raises OverflowError, and it would do so after the streak was
+    # already committed — leaving the counter advanced and no cooldown armed.
+    clock = FakeClock()
+    g = gov(clock=clock, max_consecutive_failures=1, cooldown_base_s=60.0, cooldown_max_s=3600.0)
+    last = None
+    for _ in range(1200):
+        last = g.record_failure(0.0)
+    check(last is not None and not last.allowed, "the breaker is still armed after 1200 failures")
+    check(last.retry_after_s == 3600.0, "cooldown saturates at the cap rather than overflowing")
+    check(not g.check(10_000.0, 5.0).allowed, "an extreme streak leaves the breaker open, not disabled")
+
     # ── blocked trades are audited but cost nothing ──────────────────────────
     g = gov(min_profit_usd=10.0)
     d = g.check(10_000.0, 1.0)
     g.record_blocked(d)
     check(g.daily_loss_usd() == 0.0, "a blocked trade adds no loss (nothing was broadcast)")
     check(g.status()["today_blocked"] == 1, "a blocked trade is still recorded for review")
+
+    # A halt is a state, not an event: an open cooldown or a tripped daily cap
+    # refuses every opportunity found, once per cycle per worker, for as long as
+    # it lasts. One row per refusal would be tens of thousands of identical rows
+    # in the shared database during a single day-long halt.
+    for _ in range(1000):
+        g.record_blocked(g.check(10_000.0, 1.0))
+    check(g.status()["today_blocked"] == 1, "1000 consecutive identical blocks collapse to one row")
+
+    clock = FakeClock()
+    g = gov(clock=clock, min_profit_usd=10.0, max_consecutive_failures=1, cooldown_base_s=60.0)
+    g.record_blocked(g.check(10_000.0, 1.0))          # min_profit block
+    g.record_failure(0.0)                              # opens the breaker
+    g.record_blocked(g.check(10_000.0, 50.0))          # different code: breaker
+    check(g.status()["today_blocked"] == 2, "a block with a different cause is recorded separately")
+
+    clock.advance(120.0)
+    check(g.check(10_000.0, 50.0).allowed, "breaker closed after the cooldown")
+    g.record_skip("traded through")                    # real activity ends the halt
+    g.record_blocked(g.check(10_000.0, 1.0))           # min_profit again, after trading resumed
+    check(g.status()["today_blocked"] == 3,
+          "a repeat cause is recorded again once real activity happened in between")
+
+    # status() is a reporting call and must not disturb the dedup state it reads.
+    g = gov(min_profit_usd=10.0)
+    g.record_blocked(g.check(10_000.0, 1.0))
+    g.status(); g.status(); g.status()
+    g.record_blocked(g.check(10_000.0, 1.0))
+    check(g.status()["today_blocked"] == 1, "calling status() does not reset block deduplication")
 
     # ── status report ────────────────────────────────────────────────────────
     clock = FakeClock()

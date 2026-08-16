@@ -79,6 +79,18 @@ def build_lanes(
     if not keys:
         if not fallback_key:
             return []
+        # Same empty-contract check the multi-lane loop below enforces. Without
+        # it, PRIVATE_KEY set with no FLASH_CONTRACT_ADDRESS produced a
+        # Lane(contract="") that every executor silently returned None for —
+        # indistinguishable from an unprofitable market, and (since the risk
+        # governor landed) enough to walk the circuit breaker toward tripping on
+        # what is purely a missing config value.
+        if not fallback_contract:
+            raise LaneConfigError(
+                "PRIVATE_KEY is set but FLASH_CONTRACT_ADDRESS is empty — there is "
+                "no deployed receiver to execute against. Deploy one (`jdl deploy "
+                "receiver`) and set FLASH_CONTRACT_ADDRESS, or unset LIVE_EXECUTION."
+            )
         return [Lane(index=0, priv_key=fallback_key, address=_address_of(fallback_key),
                       contract=fallback_contract)]
 
