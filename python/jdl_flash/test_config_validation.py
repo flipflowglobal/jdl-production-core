@@ -94,6 +94,62 @@ def main():
     warnings = e.validate_env_config()
     check(len(warnings) == 3, f"multiple distinct problems all reported (got {len(warnings)})")
 
+    # ── the fail-closed contract must cover EVERY env-parsed constant ──
+    # Regression: CONFIG_ISSUES/CONFIG_OK were snapshotted partway down the
+    # module, so MAXIMISE_REVENUE — parsed below the snapshot — sat outside the
+    # contract entirely. `MAXIMISE_REVENUE=ture LIVE_EXECUTION=1` produced
+    # CONFIG_OK=True and live execution enabled while config.ok() was False.
+    # Re-import the module under a malformed value for each knob it parses.
+    import subprocess
+
+    # Assert the value is actually *detected*, not merely that nothing blew up —
+    # a weaker probe would pass for a variable that skipped validation entirely.
+    probe = (
+        "import jdl_flash.flash_loan_engine as e, sys;"
+        "var = sys.argv[1];"
+        "print('DETECTED' if any(l.startswith(var + '=') for l in e.CONFIG_ISSUES) else 'MISSED');"
+        "print('CLOSED' if not e.CONFIG_OK and not e.LIVE_EXEC else 'OPEN')"
+    )
+    # A controlled baseline: this machine's own environment carries malformed
+    # values (that is what motivated config.py), which would mask the variable
+    # under test.
+    clean = {k: v for k, v in os.environ.items()
+             if k not in {"MIN_PROFIT_USD", "LIVE_EXECUTION", "MAXIMISE_REVENUE",
+                          "CHAIN_ID", "USE_REAL_QUOTES", "GELATO_ENABLED"}}
+    for var, bad in (
+        ("MIN_PROFIT_USD", "0.o1"),
+        ("MAX_LOAN_USD", "not-a-number"),
+        ("REAL_LOAN_USD", "1O000"),
+        ("CHAIN_ID", "4216l"),
+        ("GELATO_MAX_FEE_USD6", "1.5"),
+        ("MAXIMISE_REVENUE", "ture"),
+        ("USE_REAL_QUOTES", "yep"),
+        ("GELATO_ENABLED", "maybe"),
+        ("MAX_CONSECUTIVE_FAILURES", "three"),
+        ("RISK_COOLDOWN_SEC", "60s"),
+        ("RISK_COOLDOWN_MAX_SEC", "$3600"),
+        ("MAX_DAILY_LOSS_USD", "25,00"),
+    ):
+        env = {**clean, var: bad, "LIVE_EXECUTION": "1", "PRIVATE_KEY": "0x" + "11" * 32}
+        out = subprocess.run([sys.executable, "-c", probe, var], capture_output=True, text=True,
+                             env=env, cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        check(out.returncode == 0, f"a malformed {var} does not crash the import")
+        check("DETECTED" in out.stdout, f"a malformed {var} is reported as a config issue")
+        check("CLOSED" in out.stdout, f"a malformed {var} disables live execution (fails closed)")
+
+    # ── the kill switch must survive a tilde ──
+    # Path('~/jdl/HALT').exists() is always False, so an unexpanded HALT_FILE
+    # would mean the emergency stop silently never engages — the worst possible
+    # failure mode for an emergency stop. The templates document it with a `~`.
+    halt_probe = (
+        "import jdl_flash.flash_loan_engine as e;"
+        "print('EXPANDED' if e.HALT_FILE and '~' not in e.HALT_FILE else 'RAW:' + str(e.HALT_FILE))"
+    )
+    out = subprocess.run([sys.executable, "-c", halt_probe], capture_output=True, text=True,
+                         env={**clean, "HALT_FILE": "~/jdl/HALT"},
+                         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    check("EXPANDED" in out.stdout, f"a tilde in HALT_FILE is expanded ({out.stdout.strip()})")
+
     reset()  # leave module state clean for any other test run in the same process
     print(f"\nResults: {passed}/{passed + failed} passed")
     return 0 if failed == 0 else 1

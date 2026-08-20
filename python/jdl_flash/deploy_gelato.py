@@ -69,11 +69,19 @@ def main():
     factory_data = "0x" + (SALT + init_code).hex()
 
     print(f"Owner       : {owner}")
-    print(f"Chain       : {e.CHAIN_ID}  {'(Arbitrum One ✓)' if e.CHAIN_ID == 42161 else '(!! not Arbitrum)'}")
+    _CHAIN_NAMES = {42161: "Arbitrum One ✓", e.SEPOLIA_CHAIN_ID: "Arbitrum Sepolia (testnet) ✓"}
+    print(f"Chain       : {e.CHAIN_ID}  ({_CHAIN_NAMES.get(e.CHAIN_ID, '!! not Arbitrum')})")
     print(f"Factory     : {CREATE2_FACTORY}")
     print(f"Predicted   : {predicted}   ← the deployed address (deterministic)")
-    if e.CHAIN_ID != 42161:
-        print("✗ CHAIN_ID must be 42161 (Arbitrum One). Fix ~/jdl/.env."); sys.exit(1)
+    # Arbitrum Sepolia is permitted as well as Arbitrum One. It was previously
+    # rejected outright, which made the documented dry-run impossible to perform:
+    # docs/SEPOLIA_DRYRUN.md tells operators to run this exact script with
+    # CHAIN_ID=421614, and the RECEIVER_* env overrides exist for no other reason.
+    # Rehearsing a deployment on testnet is precisely the step that should not be
+    # blocked before one that spends real money.
+    if e.CHAIN_ID not in (42161, e.SEPOLIA_CHAIN_ID):
+        print(f"✗ CHAIN_ID must be 42161 (Arbitrum One) or {e.SEPOLIA_CHAIN_ID} "
+              f"(Arbitrum Sepolia). Fix ~/jdl/.env."); sys.exit(1)
 
     ans = input("\nSubmit gasless deployment via Gelato? [y/N] ").strip().lower()
     if ans != "y":

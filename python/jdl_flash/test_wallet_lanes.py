@@ -101,6 +101,21 @@ def main():
     check(wl.verify_lane_ownership(eth_call_fails, lane) is None,
           "verify_lane_ownership: None (not a hard error) when RPC read fails")
 
+    # ── the fallback lane enforces the same empty-contract rule as the loop ──
+    # PRIVATE_KEY with no FLASH_CONTRACT_ADDRESS used to yield Lane(contract=""),
+    # which every executor silently returned None for — indistinguishable from an
+    # unprofitable market, and (with the risk governor in place) enough to walk
+    # the circuit breaker toward tripping on a purely missing config value.
+    try:
+        wl.build_lanes("", "", fallback_key=KEY_0, fallback_contract="")
+        check(False, "fallback lane with no contract raises LaneConfigError")
+    except wl.LaneConfigError as exc:
+        check("FLASH_CONTRACT_ADDRESS" in str(exc),
+              "fallback lane with no contract raises LaneConfigError naming the missing var")
+
+    check(wl.build_lanes("", "", fallback_key="", fallback_contract="") == [],
+          "no key at all is still an empty lane list, not an error (nothing to execute with)")
+
     print(f"\nResults: {passed}/{passed + failed} passed")
     return 0 if failed == 0 else 1
 
