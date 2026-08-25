@@ -20,12 +20,11 @@ import threading
 import random
 import statistics
 import traceback
-import urllib.request
 from collections import deque
-from datetime   import datetime, timezone
+from datetime   import datetime
 from pathlib    import Path
-from typing     import Dict, Any, List, Optional, Tuple
-from dataclasses import dataclass, field
+from typing     import Dict, List, Optional, Tuple
+from dataclasses import dataclass
 from dotenv     import load_dotenv
 
 try:
@@ -1088,7 +1087,6 @@ try:
     from jdl_flash.triangular_scanner  import TriangularScanner
     from jdl_flash.pattern_recognition import PatternRecognition
     from jdl_flash.market_analysis     import MarketAnalysis
-    from jdl_flash.prediction          import EWMAForecast, ConfidenceScorer
     ADV_MODULES_OK = True
 except Exception as _adv_err:        # missing file / import error → engine still runs
     ADV_MODULES_OK = False
@@ -1185,8 +1183,15 @@ class FlashbotsPEG:
             from eth_account.messages import encode_defunct
             w3 = get_w3() or Web3(Web3.HTTPProvider(RPC_ARB, request_kwargs={'timeout':10}))
             acc = Account.from_key(PRIV_KEY)
-            profit_wei  = int(opp.profit_usd / eth_price * 1e18)
-            builder_fee = int(profit_wei * 0.05)
+            # A builder tip (e.g. 5% of opp.profit_usd converted to wei) is what a
+            # real Flashbots bundle needs to have any chance of inclusion on
+            # Ethereum L1 — via a coinbase transfer or a second tx in the bundle,
+            # neither of which this does. Left unimplemented rather than half-
+            # wired because this strategy is unreachable in this Arbitrum-only
+            # system anyway: `submit` only fires when CHAIN_ID == 1, and CHAIN_ID
+            # is validated elsewhere to be Arbitrum One/Sepolia only (Arbitrum's
+            # sequencer has no public mempool for a private relay to bypass in
+            # the first place — see NexusExecutor.simulate).
             nonce = _nonce(w3, acc.address)
             tx = {
                 'to': _w3_cs(CONTRACT),
@@ -1725,7 +1730,7 @@ async def menu_run_daemon():
     print(_chain_line())
     print()
     print(f"  {C.BYELLOW}Runs continuous scan + execute cycles with all algorithms.{C.RESET}")
-    print(f"  Gas strategies rotate via UCB1 bandit learning.")
+    print("  Gas strategies rotate via UCB1 bandit learning.")
     print(f"  Profits auto-reinvest until ${WITHDRAW_THRESH:,.0f} threshold.")
     if not CONTRACT:
         print(f"  {C.YELLOW}No contract set — running in SCAN MODE (opportunities logged, not submitted).{C.RESET}")
@@ -1851,7 +1856,7 @@ def menu_algorithms():
     print(f"    BULL {C.BGREEN}{k.fraction(0.65,2.5,'BULL')*100:.2f}%{C.RESET}   NEUTRAL {C.CYAN}{k.fraction(0.65,2.5,'NEUTRAL')*100:.2f}%{C.RESET}   BEAR {C.RED}{k.fraction(0.65,2.5,'BEAR')*100:.2f}%{C.RESET}")
     print()
     print(f"  {C.BOLD}Active:{C.RESET} GARCH ✓  Kalman ✓  OU ✓  UCB1 ✓  Q-Learn ✓  Newton-Raphson ✓")
-    print(f"          Bellman-Ford ✓  Kelly ✓  Fourier ✓  EMA ✓  Z-Score ✓")
+    print("          Bellman-Ford ✓  Kelly ✓  Fourier ✓  EMA ✓  Z-Score ✓")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 def menu_status():
@@ -2013,7 +2018,7 @@ def menu_real_quote():
         input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
     loan = REAL_LOAN_USD
     print(f"  Loan size : {C.BYELLOW}${loan:,.0f}{C.RESET} USDC   {C.DIM}(REAL_LOAN_USD){C.RESET}")
-    print(f"  Route     : USDC → WETH → USDC across fee tiers\n")
+    print("  Route     : USDC → WETH → USDC across fee tiers\n")
     print(f"  {'buy':>5} {'sell':>5} {'WETH out':>16} {'USDC back':>14} {'net (incl 0.05% fee)':>22}")
     print(f"  {'─'*5} {'─'*5} {'─'*16} {'─'*14} {'─'*22}")
     amount_in = int(loan*1e6); aave_fee = amount_in*5//10000; any_q=False
@@ -2287,7 +2292,7 @@ async def menu_swarm():
     if coord is None:
         print(f"  {C.YELLOW}Live quoter not ready (check RPC / web3). Nothing to scan.{C.RESET}")
         input(f"\n  {C.DIM}Press ENTER…{C.RESET}"); return
-    raw = input(f"  Scan rounds [3]: ").strip()
+    raw = input("  Scan rounds [3]: ").strip()
     rounds = int(raw) if raw.isdigit() else 3
     swarm = coord.make_swarm(workers)
     print(f"\n  {C.DIM}Scanning {rounds} rounds across {workers} workers…{C.RESET}\n")
@@ -2407,7 +2412,7 @@ def menu_connection():
         else:
             print(f"    • Add to {C.CYAN}~/jdl/.env{C.RESET}:")
             print(f"        {C.CYAN}ALCHEMY_ARB_KEY=your_key{C.RESET}   {C.DIM}(from alchemy.com → Arbitrum One){C.RESET}")
-            print(f"      or a full URL:")
+            print("      or a full URL:")
             print(f"        {C.CYAN}RPC_URL=https://arb-mainnet.g.alchemy.com/v2/your_key{C.RESET}")
             print(f"    • The public node {C.DIM}arb1.arbitrum.io/rpc{C.RESET} is tried automatically but is rate-limited.")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")

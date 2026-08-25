@@ -161,6 +161,22 @@ contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable, GelatoRelayER
 
         uint256 gasStart = gasleft();
 
+        // Captured before the swap loop runs. Aave has already transferred
+        // `amount` into this contract by the time executeOperation is called,
+        // so balanceBefore = amount + whatever balance the contract already
+        // held. Gating the profit check on this — the balance DELTA since
+        // entry — rather than on the absolute post-trade balance is the fix:
+        // the old absolute check (finalBalance >= amount+premium) could pass
+        // on a genuinely losing route whenever pre-existing/leftover contract
+        // balance happened to cover the shortfall, silently spending that
+        // balance and reporting the loss as "profit". That breaks the one
+        // safety guarantee this whole system is built on — an unprofitable
+        // route must revert (only gas lost), never quietly succeed at the
+        // owner's own balance's expense. A delta-based check can't be
+        // gamed that way: it only ever credits what THIS trade actually
+        // earned.
+        uint256 balanceBefore = IERC20(asset).balanceOf(address(this));
+
         // Decode swap steps
         ArbitrageLib.SwapStep[] memory steps = abi.decode(params, (ArbitrageLib.SwapStep[]));
         if (steps.length == 0 || steps.length > MAX_STEPS)
@@ -172,15 +188,18 @@ contract NexusFlashReceiver is ReentrancyGuard, Pausable, Ownable, GelatoRelayER
             runningAmount = _executeStep(steps[i], runningAmount);
         }
 
-        // Profit check: must cover loan + premium
-        uint256 totalOwed = amount + premium;
+        // Profit check: this trade's own gain must cover the Aave premium.
+        // `gained >= premium` is equivalent to `finalBalance >= balanceBefore
+        // + premium`, and since balanceBefore already includes the borrowed
+        // `amount`, that is strictly stronger than (and implies) the solvency
+        // check the old code performed directly — finalBalance >= amount +
+        // premium — so nothing is lost by replacing it outright.
         uint256 finalBalance = IERC20(asset).balanceOf(address(this));
-        if (finalBalance < totalOwed)
-            revert InsufficientProfit(
-                finalBalance > totalOwed ? finalBalance - totalOwed : 0,
-                1 // minimum 1 wei profit enforced by caller
-            );
+        uint256 gained = finalBalance > balanceBefore ? finalBalance - balanceBefore : 0;
+        if (gained < premium)
+            revert InsufficientProfit(gained, premium);
 
+        uint256 totalOwed = amount + premium;
         uint256 profit = finalBalance - totalOwed;
 
         // Approve Aave repayment (SafeERC20 handles non-standard tokens). Aave pulls
