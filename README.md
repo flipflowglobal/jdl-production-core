@@ -163,8 +163,8 @@ Installed by `pip install -e python/`. Run `jdl --help` or `jdl <command> --help
 | Command | What it does |
 |---------|--------------|
 | `bash setup.sh` | Install only |
-| `bash setup.sh run` | Install + launch engine |
-| `bash setup.sh test` | Install + run the 79-test suite |
+| `bash setup.sh run` | Install + launch engine (`jdl start flashloan`) |
+| `bash setup.sh test` | Install + run the full test suite (`jdl test`) |
 | `bash setup.sh termux` | Termux-specific guided install |
 | `bash setup.sh swarm-boot` | Install the always-on parallel-scanner boot hook |
 

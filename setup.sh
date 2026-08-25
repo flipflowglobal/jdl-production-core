@@ -305,12 +305,25 @@ if [ "$IS_TERMUX" = "1" ]; then
 fi
 
 # ── Optional: run or test ─────────────────────────────────────
+# Both go through `jdl` (this venv's copy), NOT a direct `python3 <script>.py`
+# invocation — `jdl start flashloan` is jdl_flash.flash_loan_engine, the engine
+# this whole setup wires .env for and that config.py/risk_limits.py protect
+# (fail-closed config parsing, the pre-trade circuit breaker/daily-loss-cap/
+# kill-switch gate). python/trading_core.py is a separate, older, standalone
+# engine kept at the repo root for standalone use (see pyproject.toml) — it has
+# none of that, and one code path here used to launch it directly under the
+# `run`/`termux` verbs while every other doc and command in this project
+# (README_FLASH.md, start.sh, TERMUX.md) already treats `jdl start flashloan`
+# as canonical. Likewise `test` used to run only test_flash_engine.py (79
+# tests) directly, silently skipping the 3 suites added alongside the risk
+# gate — `jdl test` is the full, current suite (17, at last count) and the
+# same command CI runs, so this is the one place that can never drift from it.
 if [ "$1" = "run" ] || [ "$1" = "termux" ]; then
     echo -e "${CYAN}Launching Flash Loan Engine...${RESET}"
-    python3 "$SCRIPT_DIR/python/trading_core.py"
+    "$VENV_DIR/bin/jdl" start flashloan
 elif [ "$1" = "test" ]; then
-    echo -e "${CYAN}Running test suite (expect 79/79)...${RESET}"
-    python3 "$SCRIPT_DIR/python/jdl_flash/test_flash_engine.py"
+    echo -e "${CYAN}Running full test suite (jdl test)...${RESET}"
+    "$VENV_DIR/bin/jdl" test
 elif [ "$1" = "swarm-boot" ]; then
     # Wires up constant, unattended parallel-scanner opportunity scanning
     # (swarm_daemon.py, supervised by flash_supervisor.py) so it survives
