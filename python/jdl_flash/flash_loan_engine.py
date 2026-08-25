@@ -335,10 +335,19 @@ PROTOCOLS: Dict[str, dict] = {
     },
     'AAVE_V3': {
         'address': '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
-        'fee_bps':  9,
+        # 5 bps (0.05%), not 9 — Aave V3's flash-loan premium was reduced from
+        # 0.09% by governance. This must match AAVE_PREMIUM_BPS, the figure
+        # every real profit calculation uses (ArbitrageLib.sol,
+        # NexusFlashReceiver.sol, rust/hotpath/src/lib.rs, and
+        # build_swap_steps below all independently hardcode 5). This entry is
+        # display/ranking-only (ProtocolFinder never controls which contract
+        # actually gets flash-loaned from — that's hardcoded to Aave via
+        # NexusFlashReceiver), but a stale value here still misranked Aave
+        # against other protocols and showed a wrong fee to the operator.
+        'fee_bps':  5,
         'type':    'aave',
         'tokens':  ['USDC','WETH','WBTC','DAI','USDT','ARB'],
-        'desc':    'Aave V3 Pool  (0.09% fee)',
+        'desc':    'Aave V3 Pool  (0.05% fee)',
     },
     'RADIANT': {
         'address': '0xF4B1486DD74D07706052A33d31d7c0AAFD0659E1',
