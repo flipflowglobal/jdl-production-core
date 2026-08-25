@@ -104,10 +104,13 @@ bash scripts/run-all-tests.sh
 | **python** | `jdl test` (all `jdl_flash` + supervisor + native suites) | blocking |
 | **rust** | `cargo test` + `cargo clippy --all-targets -- -D warnings` | blocking |
 | **node** | `npm test` (`node --test`) in `node/` | blocking |
-| **solidity** | Hardhat compile (solc 0.8.20) in `contracts/` | advisory* |
+| **solidity** | Hardhat compile (solc 0.8.20) in `contracts/` | blocking |
+| **solidity (fork tests)** | `npm run test:fork` / `forge test` — only with `ARB_RPC_URL` set | advisory* |
 
-\* Solidity is **advisory** — it mirrors CI's `continue-on-error` (Hardhat downloads solc and
-resolves imports at compile time, so a network hiccup shouldn't fail the whole run).
+\* The mainnet-fork tests are **advisory** (they depend on a public RPC that can rate-limit).
+The Hardhat *compile* step, by contrast, is blocking — same as CI. It used to be advisory
+too, which is exactly how a dependency bump that broke `npm run compile` outright stayed
+invisible for a while: the command exited 1 on every run and nothing ever failed on it.
 
 The script prints a per-suite `✓ PASS` / `✗ FAIL` / `○ SKIP` summary and one verdict, exiting
 `0` only when every **blocking** suite that ran passed.
@@ -159,7 +162,7 @@ autostart, a systemd user service (if your session has systemd), or `nohup` — 
 | `run-all-tests.sh` says `python … SKIP` | `jdl` not installed / venv not found — `source ~/.flash_venv/bin/activate` or re-run `bash setup.sh` |
 | `rust … SKIP` | `cargo` missing — re-run `bash setup.sh`, or install rustup |
 | `node … SKIP` | `npm` missing — `sudo apt install -y nodejs npm` (or use nvm), then re-run |
-| `solidity … FAIL` | usually a network/solc-download hiccup; it's advisory and won't fail the verdict — retry with a connection |
+| `solidity … FAIL` | the compile step is blocking (same as CI) — could be a network/solc-download hiccup (retry) or a real build break; check the compiler output above the summary |
 | `test_cli.py` fails with `jdl: not found` | the venv's `bin/` isn't on PATH — `source ~/.flash_venv/bin/activate` (the wrapper handles this for you) |
 | Fork tests fail / skipped | set `ARB_RPC_URL` to a working Arbitrum RPC and re-run |
 
