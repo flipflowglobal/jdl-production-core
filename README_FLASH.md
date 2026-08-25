@@ -946,12 +946,6 @@ mkdir -p ~/.flash_loan_engine
 └──────────┘  └────────┬────────┘  └─────────────┘
                        │
                        ▼
-             ┌─────────────────┐
-             │   gas_kernel.py │
-             │  7 strategies   │
-             │  UCB1 bandit    │
-             └────────┬────────┘
-                      │
            ┌──────────┼──────────┐
            ▼          ▼          ▼
      Flashbots    Gelato     MEV-Share
@@ -1082,8 +1076,7 @@ Sepolia first** — Gelato sponsors testnet gas for free.
 ```
 jdl-production-core/
 ├── python/
-│   ├── flash_loan_engine.py     # Main engine + Termux UI
-│   ├── gas_kernel.py            # 7 gas strategies + UCB1
+│   ├── flash_loan_engine.py     # Main engine + Termux UI (7 gas strategies + UCB1 live here)
 │   ├── flash_supervisor.py      # Process supervisor
 │   ├── test_flash_engine.py     # 79-test suite
 │   └── requirements_flash.txt  # Python dependencies

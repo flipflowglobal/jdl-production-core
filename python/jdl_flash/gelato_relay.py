@@ -17,7 +17,6 @@ Everything here is transcribed 1:1 from the official @gelatonetwork/relay-sdk
 
 No Gelato SDK / Node dependency — pure `requests` + `eth_account`.
 """
-import time
 import logging
 from typing import Optional, Tuple
 

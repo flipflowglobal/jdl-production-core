@@ -68,7 +68,6 @@ Generated repository inventory.
 ├── python
 │   ├── .env.production.template
 │   ├── flash_supervisor.py
-│   ├── gas_kernel.py
 │   ├── jdl_flash
 │   │   ├── __init__.py
 │   │   ├── _paths.py
@@ -165,7 +164,6 @@ Generated repository inventory.
 ./start.sh
 ./POLYGLOT.md
 ./README.md
-./python/gas_kernel.py
 ./python/pyproject.toml
 ./python/test_flash_supervisor.py
 ./python/jdl_flash/test_swarm_daemon.py

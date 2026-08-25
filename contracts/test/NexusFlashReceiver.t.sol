@@ -119,19 +119,28 @@ contract NexusFlashReceiverForkTest is Test {
     // Needed for test_RescueETH: the test contract is the owner/recipient.
     receive() external payable {}
 
-    // PROPERTY: no fuzzed round-trip can complete while leaving the receiver poorer.
+    // PROPERTY: no fuzzed round-trip can complete while leaving the owner poorer.
     // Either the arb reverts (efficient market — the common case) or, if it somehow
-    // completes, the receiver's USDC balance must not have decreased. Fuzzes loan size
+    // completes, the owner's USDC balance must not have decreased. Fuzzes loan size
     // across 1 USDC → 1M USDC and both legs' fee tiers across the three real Uni V3 tiers.
+    //
+    // Checks the OWNER's balance, not the receiver's: initiateFlashLoan sweeps
+    // every trade's outcome straight to owner() before returning (see _sweep,
+    // called unconditionally at the end of initiateFlashLoan), so the
+    // receiver's own balance is always 0 immediately afterward regardless of
+    // whether the trade won or lost — asserting against it was asserting
+    // against a constant. The owner's balance is where a real loss (or gain)
+    // actually shows up, and is what NexusFlashReceiver.executeOperation's
+    // balance-delta profit check (see its comment there) exists to protect.
     function testFuzz_RoundTripNeverLeavesLoss(uint256 loanUsdcRaw, uint8 feeAIdx, uint8 feeBIdx) public {
         uint24[3] memory tiers = [uint24(500), uint24(3000), uint24(10000)];
         uint256 loanAmount = bound(loanUsdcRaw, 1e6, 1_000_000e6);
         ArbitrageLib.SwapStep[] memory s = new ArbitrageLib.SwapStep[](2);
         s[0] = ArbitrageLib.SwapStep(0, address(0), USDC, WETH, tiers[feeAIdx % 3], 0, 0, 0, bytes32(0));
         s[1] = ArbitrageLib.SwapStep(0, address(0), WETH, USDC, tiers[feeBIdx % 3], 0, 0, 0, bytes32(0));
-        uint256 balBefore = IERC20(USDC).balanceOf(address(receiver));
+        uint256 ownerBalBefore = IERC20(USDC).balanceOf(owner);
         try receiver.initiateFlashLoan(USDC, loanAmount, abi.encode(s)) {
-            assertGe(IERC20(USDC).balanceOf(address(receiver)), balBefore, "loss on 'successful' arb");
+            assertGe(IERC20(USDC).balanceOf(owner), ownerBalBefore, "loss on 'successful' arb");
         } catch { /* expected: efficient market → most routes revert. Property: no loss ever completes. */ }
     }
 }
