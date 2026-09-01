@@ -17,8 +17,17 @@ license-files = ["LICENSE"]
 # fails to build on Android. Verified 79/79 tests + live deploy on web3 6.20.4.
 # The engine's v5/v6 shims + hand-rolled ABI keep it working on either line.
 # The advanced modules are stdlib-only; web3 is only needed for on-chain quotes/exec.
+#
+# Pinned exactly, not left as a "<8" range: web3 7.0.0 added a direct hard
+# dependency on pydantic>=2.4.0, which needs pydantic-core (a compiled Rust/PyO3
+# extension) — there's no published Android wheel for it, so pip falls back to
+# building from source via maturin, which fails outright on Termux ("Failed to
+# determine Android API level"). See requirements_flash.txt for the full
+# writeup, including a second, independent way a wider range here can land on
+# the same failure. This must stay in sync with that file — same package, same
+# venv, same failure mode either way it drifts.
 dependencies = [
-    "web3>=6.0.0,<8",
+    "web3==6.20.4",
     "python-dotenv>=1.0.0",
 ]
 
