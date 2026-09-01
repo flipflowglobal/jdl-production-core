@@ -312,7 +312,7 @@ malformed values; see `config.py`.
 | **Full suite (all languages, mirrors CI)** | `bash scripts/run-all-tests.sh` | python + rust + node + solidity |
 | Python engine | `python3 -m jdl_flash.test_flash_engine` | 79/79 |
 | Config readers | `python3 jdl_flash/test_config.py` | 62/62 |
-| Risk governor | `python3 jdl_flash/test_risk_limits.py` | 62/62 |
+| Risk governor | `python3 jdl_flash/test_risk_limits.py` | 77/77 |
 | Python (everything — same as CI) | `jdl test` | all suites |
 | Contracts (Foundry) | `forge test` | 7/7 fork |
 | Contracts (Hardhat) | `npm run test:fork` | 7/7 fork |
