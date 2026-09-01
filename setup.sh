@@ -97,6 +97,34 @@ if [ "$IS_TERMUX" = "1" ]; then
     pkg install -y python-rpds-py 2>/dev/null || true
     pkg install -y python-psutil  2>/dev/null || true
     ok "Termux packages ready"
+
+    # Belt-and-braces for the rpds-py workaround above: it's silenced
+    # (2>/dev/null || true) because a failure here must never abort setup, but
+    # that also means a broken/renamed Termux package goes unnoticed — exactly
+    # what happened live: pkg-installed rpds-py wasn't actually satisfying pip
+    # (Python 3.14, current at time of writing, is new enough that Termux's
+    # packaged version didn't match what jsonschema/web3 wanted), so pip fell
+    # through to building it from source via maturin, which fails outright
+    # without ANDROID_API_LEVEL set — the exact same class of failure this repo
+    # already worked around once for pydantic-core (see requirements_flash.txt).
+    # Rather than chase every future Rust-extension package one prebuilt-`pkg`
+    # wheel at a time, give maturin what it needs to cross-compile natively
+    # with Termux's own clang (already installed, see the package list above)
+    # if a source build ever becomes necessary — a real fallback, not just a
+    # first line of defense. ANDROID_API_LEVEL is read from the device itself
+    # via `getprop`, standard and always available in Termux; an operator's own
+    # export takes precedence and is never overwritten.
+    if [ -z "${ANDROID_API_LEVEL:-}" ] && command -v getprop >/dev/null 2>&1; then
+        DETECTED_API_LEVEL="$(getprop ro.build.version.sdk 2>/dev/null)"
+        case "$DETECTED_API_LEVEL" in
+            ''|*[!0-9]*) : ;;  # empty or non-numeric — getprop gave us nothing usable
+            *)
+                export ANDROID_API_LEVEL="$DETECTED_API_LEVEL"
+                info "ANDROID_API_LEVEL=$ANDROID_API_LEVEL (from getprop) — lets a Rust"
+                info "extension build natively via maturin if a prebuilt wheel is missing"
+                ;;
+        esac
+    fi
 fi
 
 # ── 1. Python check ──────────────────────────────────────────
