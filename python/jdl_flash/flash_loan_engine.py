@@ -1761,7 +1761,8 @@ async def menu_run_daemon():
         await daemon.start(interval=interval)
     except KeyboardInterrupt:
         daemon.stop()
-        print(f"\n  {C.BYELLOW}Engine stopped.  Cycles={daemon.cycle}  Errors={daemon.errors}{C.RESET}")
+        print(f"\n  {C.BYELLOW}Engine stopped.  Cycles={daemon.cycle}  "
+              f"Errors={daemon.errors}  Blocked={daemon.blocked}{C.RESET}")
     input(f"\n  {C.DIM}Press ENTER…{C.RESET}")
 
 async def menu_scan_now():
@@ -2171,16 +2172,28 @@ def build_live_coordinator(feed: 'PriceFeed', loan_usd: float, execute: bool):
         lanes = wl.build_lanes(SWARM_KEYS, SWARM_CONTRACTS,
                                 fallback_key=PRIV_KEY, fallback_contract=CONTRACT)
     except wl.LaneConfigError as e:
-        logging.warning(f'swarm lane config error, falling back to single wallet: {e}')
-        try:
-            lanes = wl.build_lanes('', '', fallback_key=PRIV_KEY, fallback_contract=CONTRACT)
-        except wl.LaneConfigError as fallback_err:
-            # The single-wallet fallback is unusable too (typically PRIVATE_KEY
-            # set with no FLASH_CONTRACT_ADDRESS). Scanning must still work — the
+        # SWARM_KEYS empty -> build_lanes already took the single-fallback-lane
+        # branch on this very call, so retrying with SWARM_KEYS='' would re-enter
+        # that identical branch and raise the identical error again. Only retry
+        # when SWARM_KEYS was actually set (a malformed multi-lane config, e.g. a
+        # SWARM_CONTRACTS length mismatch) — that's the case where falling back
+        # to '',''  genuinely reaches different, working logic.
+        if SWARM_KEYS.strip():
+            logging.warning(f'swarm lane config error, falling back to single wallet: {e}')
+            try:
+                lanes = wl.build_lanes('', '', fallback_key=PRIV_KEY, fallback_contract=CONTRACT)
+            except wl.LaneConfigError as fallback_err:
+                e = fallback_err
+                lanes = None
+        else:
+            lanes = None
+        if lanes is None:
+            # Nothing usable to execute against (typically PRIVATE_KEY set with
+            # no FLASH_CONTRACT_ADDRESS). Scanning must still work — the
             # coordinator is built for dry runs as well as live ones — so carry
             # on with no lanes, which leaves execute_fn None and the swarm in
             # observe-only mode rather than aborting the whole daemon.
-            logging.warning(f'no usable execution lane, scanning only: {fallback_err}')
+            logging.warning(f'no usable execution lane, scanning only: {e}')
             lanes = []
     n_wallets = max(1, len(lanes))
 

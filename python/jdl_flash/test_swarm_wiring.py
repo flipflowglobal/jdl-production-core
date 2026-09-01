@@ -210,6 +210,35 @@ def main():
 
     e.NexusExecutor = FakeExecutor  # restore for any later case
 
+    # ── 6) no redundant retry when SWARM_KEYS was already empty ──
+    # build_lanes('', '', fallback_key=X, fallback_contract='') already takes
+    # the single-fallback-lane branch and raises on the empty contract on its
+    # OWN, unretried call. Retrying with the identical '','' arguments would
+    # just re-enter that same branch and raise the identical error again —
+    # wasted work and a misleading "falling back to single wallet" log line
+    # for a fallback that was never actually different. Only a genuinely
+    # malformed SWARM_KEYS config (case 3, above) should trigger a retry.
+    from jdl_flash import wallet_lanes as real_wl
+    build_calls = []
+    real_build_lanes = real_wl.build_lanes
+
+    def counting_build_lanes(*args, **kwargs):
+        build_calls.append(args)
+        return real_build_lanes(*args, **kwargs)
+
+    e.SWARM_KEYS = ""
+    e.SWARM_CONTRACTS = ""
+    e.PRIV_KEY = KEY_A
+    e.CONTRACT = ""  # no fallback contract either -> guaranteed LaneConfigError
+    real_wl.build_lanes = counting_build_lanes
+    try:
+        coord8 = e.build_live_coordinator(feed=None, loan_usd=10000.0, execute=True)
+    finally:
+        real_wl.build_lanes = real_build_lanes
+    check(len(build_calls) == 1,
+          f"build_lanes is called exactly once when SWARM_KEYS was already empty (got {len(build_calls)})")
+    check(coord8.n_wallets == 1, "no usable lane still yields a coordinator (scan-only, n_wallets=1)")
+
     print(f"\nResults: {passed}/{passed + failed} passed")
     return 0 if failed == 0 else 1
 
