@@ -3,8 +3,36 @@
 # drops ipfshttpclient→psutil (which can't build on Android). Verified 79/79 + live
 # deploy on web3 6.20.4. The engine also runs on the old 5.31.4 line via its shims,
 # but 5.31.4 needs a `pip install --no-deps --upgrade parsimonious>=0.10` override.
-web3>=6.0.0,<8
+#
+# web3 is pinned EXACTLY to 6.20.4, not left as a range, because a range here is
+# unsafe in two independent ways — both reproduced live on a real Termux device,
+# neither catchable by this repo's CI or any sandbox (none of them are real
+# Android/Bionic-libc environments):
+#
+#   1. web3 7.0.0 added a direct hard dependency on pydantic>=2.4.0 (checked
+#      against PyPI's published metadata for every 6.x release vs. 7.x — the
+#      whole 6.x line, 6.20.4 included, is pydantic-free; 7.16.0 is not).
+#      pydantic 2.x is a thin wrapper around pydantic-core, a compiled Rust/PyO3
+#      extension with no published Android wheel, so pip falls back to building
+#      it from source via maturin — which fails outright on Termux with "Failed
+#      to determine Android API level. Please set the ANDROID_API_LEVEL
+#      environment variable." A `web3<8` (or even `<7`) range lets pip's
+#      resolver land here the moment anything ELSE in this file nudges it away
+#      from the exact verified point release — which is exactly what #2 does.
+#
+#   2. hexbytes>=1.3.1 used to be pinned here directly, and it is incompatible
+#      with EVERY 6.x web3 release: web3 6.20.4 itself requires hexbytes<0.4.0.
+#      With both constraints present, pip cannot satisfy them against 6.20.4 and
+#      backtracks to older 6.x releases (6.11.0, 6.15.0, …) that dropped web3's
+#      normal upper bound on eth-account entirely (only 6.20.4 caps it at
+#      eth-account<0.13) — landing on eth-account>=0.14, which itself requires
+#      pydantic>=2, hitting failure #1 by an entirely different path. There is
+#      no dedicated hexbytes pin below: web3==6.20.4 already pulls the exact
+#      hexbytes it was built and verified against (0.3.x), and the engine's own
+#      hex-decoding call sites (e.g. gelato_relay.py's `.replace("0x", "")`
+#      after `.hex()`) already tolerate either hexbytes API shape defensively —
+#      nothing in this codebase actually requires hexbytes>=1.3.1's behavior.
+web3==6.20.4
 requests>=2.34.2
 python-dotenv>=1.0.0
 aiohttp>=3.14.3
-hexbytes>=1.3.1
