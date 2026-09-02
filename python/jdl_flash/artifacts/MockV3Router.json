@@ -1,0 +1,281 @@
+{
+  "contract": "MockV3Router",
+  "bytecode": "0x60a0806040523461002957336080526107e7908161002f823960805181818160a701526102c90152f35b600080fdfe6080604081815260048036101561001557600080fd5b600092833560e01c908163414bf389146102f8575080638da5cb5b146102b45780639d086a1f14610252578063b3b5882d146101ed5763eb23b6e21461005a57600080fd5b346101e95760a03660031901126101e957610073610660565b6044356001600160a01b038181169460243593928690036101e557606435916084359362ffffff8516968786036101e157827f00000000000000000000000000000000000000000000000000000000000000001633036101d35750917fac3563aee39d69634744d4702bc82d438d7c2f96c042e9b966929601c09ed40d959493916101cd9316966101068630338b6106c6565b6101128330338c6106c6565b878a5260208a8152828b208a8c528152828b20828c528152828b206101388882546106a3565b9055888b5260018152828b208a8c528152828b20828c528152828b2061015f8582546106a3565b9055898b528a8152828b20898c528152828b20828c528152828b206101858582546106a3565b9055898b5260018152828b20898c528152828b20918b52528089206101ab8682546106a3565b9055519384938460409194939262ffffff606083019616825260208201520152565b0390a380f35b83516330cd747160e01b8152fd5b8980fd5b8680fd5b8280fd5b50503461024e57606036600319011261024e578060209261020c610660565b61021461067b565b61021c610691565b6001600160a01b039283168452838752848420919092168352855282822062ffffff9091168252845220549051908152f35b5080fd5b50503461024e57606036600319011261024e5780602092610271610660565b61027961067b565b610281610691565b6001600160a01b03928316845260018752848420919092168352855282822062ffffff9091168252845220549051908152f35b50503461024e578160031936011261024e57517f00000000000000000000000000000000000000000000000000000000000000006001600160a01b03168152602090f35b84848492346101e9576101003660031901126101e957608435421161065257506001600160a01b0380610329610753565b1683526020938385528284208261033e610769565b16855285528284209362ffffff948561035561077f565b1682528652838120549183610368610753565b168252600187528482208461037b610769565b16835287528482208661038c61077f565b168352875284822054928015801561064a575b61063b5760a43593876103b061077f565b16620f4240908103898111610628576103e192916103d38b6103db931689610791565b048092610791565b926106a3565b90811561061557049560c43587106106065761040a8486610400610753565b16309033906106c6565b84610413610753565b16835282885285832085610425610769565b16845288528583208161043661077f565b16845288528583206104498582546106a3565b905584610454610753565b1683526001885285832085610467610769565b16845288528583208161047861077f565b168452885285832061048b8882546107a4565b905584610496610769565b168352828852858320856104a8610753565b1684528852858320816104b961077f565b16845288528583206104cc8882546107a4565b9055846104d7610769565b16835260018852858320856104ea610753565b1684528852858320906104fb61077f565b168352875284822061050e8482546106a3565b905583610519610769565b16906064359285841680940361060357865163a9059cbb60e01b82529382526024889052888160448180875af19060018151148216156105e1575b50838752156105ce575050507fbe341580cb41cfed2f8c313925f28e331e3ebf6e82433d5e4e48f0a4c024743e610589610753565b92610592610769565b6105c58761059e61077f565b95848951958695169816968460409194939262ffffff606083019616825260208201520152565b0390a351908152f35b635274afe760e01b835282015260249150fd5b60018215166105f95750823b15153d15161689610554565b84903d90823e3d90fd5b80fd5b50845163428637bb60e11b8152fd5b634e487b7160e01b845260128352602484fd5b634e487b7160e01b865260118552602486fd5b508451636180f03f60e11b8152fd5b50831561039f565b630407b05b60e31b81528390fd5b600435906001600160a01b038216820361067657565b600080fd5b602435906001600160a01b038216820361067657565b6044359062ffffff8216820361067657565b919082018092116106b057565b634e487b7160e01b600052601160045260246000fd5b6040516323b872dd60e01b60009081526001600160a01b03938416600452938316602452604494909452909160209060648180855af1600160005114811615610733575b8360405260006060521561071d57505050565b635274afe760e01b835216600482015260249150fd5b600181151661074957813b15153d15161661070a565b833d6000823e3d90fd5b6004356001600160a01b03811681036106765790565b6024356001600160a01b03811681036106765790565b60443562ffffff811681036106765790565b818102929181159184041417156106b057565b919082039182116106b05756fea2646970667358221220ff6b8606a3220d3800bee4a5d21875d30fb3d5d34d829b321f9341414a1bbec664736f6c63430008140033",
+  "abi": [
+    {
+      "inputs": [],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "inputs": [],
+      "name": "Expired",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "NoLiquidity",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "NotOwner",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        }
+      ],
+      "name": "SafeERC20FailedOperation",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "SlippageTooHigh",
+      "type": "error"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "tokenA",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "tokenB",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint24",
+          "name": "fee",
+          "type": "uint24"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "amountA",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "amountB",
+          "type": "uint256"
+        }
+      ],
+      "name": "Seeded",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "tokenIn",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "tokenOut",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint24",
+          "name": "fee",
+          "type": "uint24"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "amountIn",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "amountOut",
+          "type": "uint256"
+        }
+      ],
+      "name": "Swapped",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "internalType": "address",
+              "name": "tokenIn",
+              "type": "address"
+            },
+            {
+              "internalType": "address",
+              "name": "tokenOut",
+              "type": "address"
+            },
+            {
+              "internalType": "uint24",
+              "name": "fee",
+              "type": "uint24"
+            },
+            {
+              "internalType": "address",
+              "name": "recipient",
+              "type": "address"
+            },
+            {
+              "internalType": "uint256",
+              "name": "deadline",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint256",
+              "name": "amountIn",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint256",
+              "name": "amountOutMinimum",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint160",
+              "name": "sqrtPriceLimitX96",
+              "type": "uint160"
+            }
+          ],
+          "internalType": "struct MockV3Router.ExactInputSingleParams",
+          "name": "params",
+          "type": "tuple"
+        }
+      ],
+      "name": "exactInputSingle",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "amountOut",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "owner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "uint24",
+          "name": "",
+          "type": "uint24"
+        }
+      ],
+      "name": "reserveIn",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "uint24",
+          "name": "",
+          "type": "uint24"
+        }
+      ],
+      "name": "reserveOut",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "tokenA",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "amountA",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "tokenB",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "amountB",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint24",
+          "name": "fee",
+          "type": "uint24"
+        }
+      ],
+      "name": "seedLiquidity",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ]
+}

@@ -94,6 +94,8 @@ def cmd_supervisor(args: argparse.Namespace) -> int:
 def cmd_deploy(args: argparse.Namespace) -> int:
     if args.target == "receiver":
         from jdl_flash.deploy_receiver import main as deploy_main
+    elif args.target == "mock-router":
+        from jdl_flash.deploy_mock_router import main as deploy_main
     else:
         from jdl_flash.deploy_gelato import main as deploy_main
     deploy_main()
@@ -380,7 +382,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_super.set_defaults(func=cmd_supervisor)
 
     p_deploy = sub.add_parser("deploy", help="deploy a contract")
-    p_deploy.add_argument("target", choices=["receiver", "gelato"], help="which deploy script to run")
+    p_deploy.add_argument("target", choices=["receiver", "gelato", "mock-router"], help="which deploy script to run")
     p_deploy.set_defaults(func=cmd_deploy)
 
     sub.add_parser("status", help="one-shot snapshot: daemon liveness, execution count, revenue").set_defaults(

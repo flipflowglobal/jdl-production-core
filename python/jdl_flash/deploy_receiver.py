@@ -1,10 +1,12 @@
 """
-deploy_receiver.py — Deploy NexusFlashReceiver to Arbitrum One from Termux.
+deploy_receiver.py — Deploy NexusFlashReceiver to Arbitrum One or Arbitrum
+Sepolia from Termux.
 
 Pure web3 — no Foundry or Node needed (their binaries don't run natively on
 Android). Reads PRIVATE_KEY + RPC from ~/jdl/.env via the engine config,
-broadcasts a REAL deployment transaction (costs a little Arbitrum gas), and
-prints the deployed address to paste into FLASH_CONTRACT_ADDRESS.
+broadcasts a REAL deployment transaction (costs a little gas on whichever
+chain CHAIN_ID selects), and prints the deployed address to paste into
+FLASH_CONTRACT_ADDRESS.
 
 Run:  python3 -m jdl_flash.deploy_receiver
 """
@@ -18,6 +20,16 @@ from jdl_flash import flash_loan_engine as e
 AAVE_V3_POOL   = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
 UNI_V3_ROUTER  = "0xE592427A0AEce92De3Edee1F18E0157C05861564"
 BALANCER_VAULT = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
+
+# Arbitrum Sepolia (421614). Aave's Pool is the one real protocol contract
+# this codebase's arbitrage legs depend on that actually exists on this
+# testnet (verified live on-chain) — Uniswap's real SwapRouter and the
+# Balancer V2 Vault are both confirmed NOT deployed there (see
+# deploy_mock_router.py's docstring), so the Uniswap slot must point at a
+# deployed MockV3Router instead (TESTNET_MOCK_ROUTER in ~/jdl/.env) and the
+# Balancer slot is a placeholder — the contract's constructor only requires
+# it to be non-zero, and nothing on the testnet test path routes through it.
+SEPOLIA_AAVE_V3_POOL = "0xBfC91D59fdAA134A4ED45f7B584cAf96D7792Eff"
 
 ARTIFACT = Path(__file__).parent / "artifacts" / "NexusFlashReceiver.json"
 
@@ -33,7 +45,7 @@ def _wait(w3, txh):
 
 
 def main():
-    print("─── Deploy NexusFlashReceiver (Arbitrum One) ───\n")
+    print("─── Deploy NexusFlashReceiver ───\n")
     if not e.WEB3_OK:
         print("✗ web3 not importable — fix the install first "
               "(pip install --no-deps --upgrade 'parsimonious>=0.10')."); sys.exit(1)
@@ -49,14 +61,29 @@ def main():
 
     chain = e._chain_id(w3)
     bal   = e._balance(w3, acct.address)
+    is_sepolia = chain == e.SEPOLIA_CHAIN_ID
     print(f"Deployer : {acct.address}")
-    print(f"Chain    : {chain}  {'(Arbitrum One ✓)' if chain == 42161 else '(!! not Arbitrum)'}")
+    print(f"Chain    : {chain}  "
+          f"{'(Arbitrum One ✓)' if chain == 42161 else '(Arbitrum Sepolia ✓)' if is_sepolia else '(!! not Arbitrum)'}")
     print(f"Balance  : {bal/1e18:.6f} ETH")
-    if chain != 42161:
-        print("✗ Not connected to Arbitrum One (chainId 42161). Aborting."); sys.exit(1)
+    if chain not in (42161, e.SEPOLIA_CHAIN_ID):
+        print("✗ Not connected to Arbitrum One or Arbitrum Sepolia. Aborting."); sys.exit(1)
     if bal == 0:
-        print("\n✗ Wallet has 0 ETH. Fund it with a little Arbitrum ETH for gas "
-              "(deployment costs ~$0.20–1.00), then re-run."); sys.exit(1)
+        net = "Sepolia (use a faucet)" if is_sepolia else "Arbitrum One"
+        print(f"\n✗ Wallet has 0 ETH. Fund it with a little {net} ETH for gas "
+              "(deployment costs ~$0.20–1.00 equivalent), then re-run."); sys.exit(1)
+
+    if is_sepolia:
+        mock_router = e._env('TESTNET_MOCK_ROUTER')
+        if not mock_router or int(mock_router, 16) == 0:
+            print("✗ TESTNET_MOCK_ROUTER not set in ~/jdl/.env — deploy one first:\n"
+                  "    python3 -m jdl_flash.deploy_mock_router"); sys.exit(1)
+        aave_pool, uni_router, balancer_vault = SEPOLIA_AAVE_V3_POOL, mock_router, acct.address
+        print(f"Aave Pool: {aave_pool}  (real, Arbitrum Sepolia)")
+        print(f"Uni slot : {uni_router}  (your deployed MockV3Router)")
+        print(f"Bal slot : {balancer_vault}  (placeholder — unused on the testnet test path)")
+    else:
+        aave_pool, uni_router, balancer_vault = AAVE_V3_POOL, UNI_V3_ROUTER, BALANCER_VAULT
 
     art = json.load(open(ARTIFACT))
     # Hand-roll the constructor encoding (3 addresses, each left-padded to 32 bytes)
@@ -70,9 +97,9 @@ def main():
     # owner. (The gasless Gelato deploy path sets _owner to the configured wallet so a
     # relayer/factory can deploy while ownership still lands on the operator.)
     ctor_args = (e._abi_w_addr(acct.address)
-                 + e._abi_w_addr(AAVE_V3_POOL)
-                 + e._abi_w_addr(UNI_V3_ROUTER)
-                 + e._abi_w_addr(BALANCER_VAULT)).hex()
+                 + e._abi_w_addr(aave_pool)
+                 + e._abi_w_addr(uni_router)
+                 + e._abi_w_addr(balancer_vault)).hex()
     data = "0x" + bytecode + ctor_args
 
     tx = {

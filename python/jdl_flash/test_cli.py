@@ -112,6 +112,8 @@ def main():
     check(args.func is cli.cmd_deploy and args.target == "receiver", "'deploy receiver' routes correctly")
     args = parser.parse_args(["deploy", "gelato"])
     check(args.target == "gelato", "'deploy gelato' routes correctly")
+    args = parser.parse_args(["deploy", "mock-router"])
+    check(args.target == "mock-router", "'deploy mock-router' routes correctly")
 
     try:
         parser.parse_args(["deploy", "not-a-real-target"])
