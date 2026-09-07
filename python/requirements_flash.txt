@@ -27,7 +27,7 @@
 #      normal upper bound on eth-account entirely (only 6.20.4 caps it at
 #      eth-account<0.13) — landing on eth-account>=0.14, which itself requires
 #      pydantic>=2, hitting failure #1 by an entirely different path. There is
-#      no dedicated hexbytes pin below: web3==6.20.4 already pulls the exact
+#      no dedicated hexbytes pin below: web3==8.0.0 already pulls the exact
 #      hexbytes it was built and verified against (0.3.x), and the engine's own
 #      hex-decoding call sites (e.g. gelato_relay.py's `.replace("0x", "")`
 #      after `.hex()`) already tolerate either hexbytes API shape defensively —
@@ -35,7 +35,7 @@
 #      (A Dependabot PR bumped that pin to hexbytes>=2.0.0 in the meantime —
 #      same conflict, worse, since 2.0.0 is further still from <0.4.0. Removing
 #      the pin entirely, as here, is the fix for both.)
-web3==6.20.4
+web3==8.0.0
 requests>=2.34.2
 python-dotenv>=1.0.0
 aiohttp>=3.14.3
