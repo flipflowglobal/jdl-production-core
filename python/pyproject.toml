@@ -27,7 +27,7 @@ license-files = ["LICENSE"]
 # the same failure. This must stay in sync with that file — same package, same
 # venv, same failure mode either way it drifts.
 dependencies = [
-    "web3==6.20.4",
+    "web3==8.0.0",
     "python-dotenv>=1.0.0",
 ]
 
