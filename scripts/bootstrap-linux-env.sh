@@ -249,8 +249,12 @@ install_rust() {
 # ===========================================================================
 install_foundry() {
     log "Foundry ${FOUNDRY_VERSION}"
-    if have forge && [[ "$(forge --version | head -1)" == *"$(forge --version | awk '{print $3}')"* ]] \
-       && [[ "$(forge --version | awk '{print $3}')" == "${FOUNDRY_VERSION#v}" ]]; then
+    # `forge --version` prints a five-line banner, so the version must be taken
+    # from the first line only — parsing the whole output yields a multi-line
+    # string that never matches, which would reinstall on every run.
+    local installed
+    installed="$(forge --version 2>/dev/null | head -1 | awk '{print $3}' || true)"
+    if [[ "$installed" == "${FOUNDRY_VERSION#v}" ]]; then
         ok "forge ${FOUNDRY_VERSION} already installed"
         return
     fi
