@@ -2,6 +2,25 @@
 """
 test_flash_engine.py — Test suite for Flash Loan Engine
 Tests all mathematical algorithms and core logic.
+
+Database isolation (B8)
+-----------------------
+Every test in this file runs against a private temporary database, never the
+live one. The engine's `DATA_DIR` / `DB_PATH` are module globals read at call
+time, so the suite points them at a temp directory for its whole run.
+
+This matters because `RevenueTracker.log(...,'0xhash123', 1)` writes a
+`success=1` row, and `flash_supervisor.total_profit()` sums
+`SUM(net_usd) WHERE success=1` over that same table to decide when to call a
+real `withdrawToken()` at $1000. Running this suite against the real
+`~/.flash_loan_engine/flash.db` inflated recorded real revenue and could arm a
+premature withdrawal; `init_db()`'s cleanup never caught it because it only
+purges `sim_%` / `dry_%` hashes.
+
+Importing `jdl_flash.test_db_guard` below installs a process-wide tripwire that
+refuses to open the live ledger at all, so a future test that forgets this
+fixture fails loudly instead of silently corrupting revenue.
+
 Run: python3 test_flash_engine.py
 Or:  menu option [8] inside flash_loan_engine.py
 """
@@ -44,6 +63,31 @@ def check(name: str, cond: bool, detail: str = ''):
 def section(title: str):
     print(f"\n  {C.CYAN}{C.BOLD}── {title} ──{C.RESET}")
 
+# The guard must be installed before the engine is imported, so nothing can
+# open the live database even for a moment during module import.
+from jdl_flash.test_db_guard import (  # noqa: E402
+    IsolatedDatabase,
+    LiveDatabaseError,
+    assert_engine_isolated,
+    assert_not_live_db,
+    default_db_path,
+    guard_is_installed,
+    is_live_db,
+    purge_execution_rows,
+)
+
+# The isolated database for the whole suite. Created up front (not per-test) so
+# `init_db()` in one test and the reads in the next share one schema, exactly as
+# they did when they shared the production database — but in a temp directory
+# that is deleted when the suite finishes.
+_SUITE_DB: IsolatedDatabase = IsolatedDatabase(prefix="jdl_engine_test_")
+
+# The hash the revenue-tracker test writes. Named here so cleanup can remove
+# exactly this row instead of relying on init_db()'s 'sim_%'/'dry_%' patterns.
+REVENUE_TEST_TX_HASH = "0xhash123"
+# The hash the real-data-policy test writes.
+SIM_TEST_TX_HASH = "sim_deadbeefdeadbeef"
+
 try:
     from jdl_flash.flash_loan_engine import (
         GARCH11, KalmanPrice, OrnsteinUhlenbeck, KellyCriterion,
@@ -56,6 +100,10 @@ try:
         ALLOW_SIM, IS_TESTNET, USE_REAL_QUOTES, CHAIN_ID,
         SEPOLIA_CHAIN_ID, REAL_LOAN_USD, MAX_LOAN_USD, db_exec, db_query,
     )
+    import jdl_flash.flash_loan_engine as _engine
+    # Point the engine at the suite's temporary database. Done before any test
+    # runs, and re-asserted in run_all_tests() in case anything moved it.
+    _SUITE_DB.apply_to(_engine)
     ENGINE_OK = True
 except ImportError as e:
     ENGINE_OK = False
@@ -247,7 +295,7 @@ def test_revenue_tracker():
     section('Revenue Tracker')
     init_db()
     before = RevenueTracker.total()
-    net = RevenueTracker.log('TEST','UNIT','0xTEST',1000.0,2.5,0.1,'0xhash123',1)
+    net = RevenueTracker.log('TEST','UNIT','0xTEST',1000.0,2.5,0.1,REVENUE_TEST_TX_HASH,1)
     after = RevenueTracker.total()
     check('Revenue increases after log', after >= before, f'{before:.4f}->{after:.4f}')
     check('net returned correctly', abs(net - 2.4) < 0.01, f'net={net}')
@@ -255,6 +303,35 @@ def test_revenue_tracker():
     check('Count >= 1', cnt >= 1, str(cnt))
     hist = RevenueTracker.history(5)
     check('History returns rows', len(hist) >= 1)
+    # The row exists in the suite's temp database, and only there.
+    check('Fixture row landed in the isolated database',
+          _row_count(REVENUE_TEST_TX_HASH) == 1,
+          f'rows={_row_count(REVENUE_TEST_TX_HASH)}')
+    check('Engine DB_PATH is not the live ledger',
+          not is_live_db(_engine.DB_PATH), str(_engine.DB_PATH))
+
+    # Explicit, hash-scoped cleanup. init_db()'s own purge only matches
+    # 'sim_%'/'dry_%', so a fixture hash like this one used to survive every
+    # subsequent run and accumulate toward the $1000 withdrawal threshold.
+    try:
+        removed = purge_execution_rows(_SUITE_DB.db_path, [REVENUE_TEST_TX_HASH])
+    except LiveDatabaseError as exc:  # pragma: no cover - guard must not fire here
+        removed = -1
+        check('Cleanup targets the isolated database', False, str(exc))
+    else:
+        check('Cleanup removed exactly the fixture row', removed == 1, f'removed={removed}')
+        check('Fixture row is gone from the database',
+              _row_count(REVENUE_TEST_TX_HASH) == 0,
+              f'rows={_row_count(REVENUE_TEST_TX_HASH)}')
+        check('Revenue total restored after cleanup',
+              abs(RevenueTracker.total() - before) < 1e-9,
+              f'{RevenueTracker.total()} vs {before}')
+
+
+def _row_count(tx_hash: str) -> int:
+    """How many `executions` rows carry ``tx_hash`` in the suite's database."""
+    row = db_query('SELECT COUNT(*) FROM executions WHERE tx_hash = ?', (tx_hash,))
+    return int(row[0][0]) if row else 0
 
 
 async def test_scanner():
@@ -349,12 +426,13 @@ def test_real_data_policy():
     init_db()
     db_exec('INSERT INTO executions(ts,strategy,gas_method,asset,loan_usd,profit_usd,'
             'gas_cost_usd,net_usd,tx_hash,success) VALUES(?,?,?,?,?,?,?,?,?,?)',
-            (time.time(), 'TEST', 'm', 'a', 1.0, 9.99, 0.0, 9.99, 'sim_deadbeefdeadbeef', 1))
+            (time.time(), 'TEST', 'm', 'a', 1.0, 9.99, 0.0, 9.99, SIM_TEST_TX_HASH, 1))
     before = db_query("SELECT COUNT(*) FROM executions WHERE tx_hash LIKE 'sim_%'")[0][0]
     check('fake sim row inserted for test', before >= 1)
     init_db()  # should purge it
     after = db_query("SELECT COUNT(*) FROM executions WHERE tx_hash LIKE 'sim_%'")[0][0]
     check('init_db purges simulated revenue rows', after == 0, f'remaining={after}')
+    check('The sim fixture row did not survive either', _row_count(SIM_TEST_TX_HASH) == 0)
 
     # Maximise-revenue sizing returns a real positive loan (or the safe default).
     d = FlashDaemon()
@@ -364,15 +442,60 @@ def test_real_data_policy():
           REAL_LOAN_USD <= loan <= MAX_LOAN_USD or loan == REAL_LOAN_USD)
 
 
+def test_database_isolation():
+    """The suite must be provably off the live ledger, for the whole run.
+
+    Runs first so a misconfiguration is reported before any test writes
+    anything, and asserts both the engine's globals and the process-wide
+    tripwire rather than trusting either one alone.
+    """
+    section('Database Isolation (B8)')
+    check('sqlite3.connect tripwire installed for the whole suite',
+          guard_is_installed())
+    check('Suite database is not the live ledger',
+          not is_live_db(_SUITE_DB.db_path), str(_SUITE_DB.db_path))
+    check('Suite database lives under a temp directory',
+          str(_SUITE_DB.root).startswith('/tmp') or 'tmp' in str(_SUITE_DB.root).lower(),
+          str(_SUITE_DB.root))
+
+    try:
+        assert_engine_isolated(_engine)
+    except LiveDatabaseError as exc:  # pragma: no cover - guard must not fire here
+        check('Engine DB_PATH is isolated', False, str(exc).splitlines()[0])
+    else:
+        check('Engine DB_PATH is isolated', True)
+
+    check('Engine DB_PATH == suite database', _engine.DB_PATH == _SUITE_DB.db_path,
+          f'{_engine.DB_PATH} vs {_SUITE_DB.db_path}')
+    check('Engine DATA_DIR is inside the suite database directory',
+          _engine.DATA_DIR == _SUITE_DB.data_dir, str(_engine.DATA_DIR))
+
+    # The tripwire itself: a direct connect to the live ledger must be refused.
+    # This is what makes the fix durable — a future test that forgets the
+    # fixture fails here rather than corrupting recorded revenue.
+    try:
+        assert_not_live_db(default_db_path(), context='isolation self-check')
+    except LiveDatabaseError:
+        check('Tripwire refuses the live database', True)
+    else:
+        check('Tripwire refuses the live database', False, 'no LiveDatabaseError raised')
+
+
 async def run_all_tests(verbose: bool = True):
     global _pass, _fail, _results
     _pass = 0; _fail = 0; _results = []
 
     if not ENGINE_OK:
         print(f"{C.RED}Engine not importable — aborting tests.{C.RESET}")
-        return
+        # Still tear the suite database down: leaving a temp directory behind on
+        # every failed run would be its own slow leak.
+        _SUITE_DB.close()
+        return False
 
     t0 = time.time()
+    # Re-assert the wiring in case an import side effect moved the globals.
+    _SUITE_DB.apply_to(_engine)
+    test_database_isolation()
     test_garch()
     test_kalman()
     test_ou()
@@ -389,6 +512,22 @@ async def run_all_tests(verbose: bool = True):
     await test_scanner()
     await test_daemon_cycle()
 
+    # Post-run guarantee: the engine was still isolated when the last test
+    # finished, and no fixture row outlived the suite. Checked before teardown
+    # so a failure here names the row that leaked.
+    section('Post-Run Database Hygiene')
+    try:
+        assert_engine_isolated(_engine)
+    except LiveDatabaseError as exc:  # pragma: no cover - guard must not fire here
+        check('Engine left pointed away from the live ledger', False,
+              str(exc).splitlines()[0])
+    else:
+        check('Engine left pointed away from the live ledger', True)
+    check(f"No '{REVENUE_TEST_TX_HASH}' row survived the suite",
+          _row_count(REVENUE_TEST_TX_HASH) == 0, f'rows={_row_count(REVENUE_TEST_TX_HASH)}')
+    check(f"No '{SIM_TEST_TX_HASH}' row survived the suite",
+          _row_count(SIM_TEST_TX_HASH) == 0, f'rows={_row_count(SIM_TEST_TX_HASH)}')
+
     elapsed = time.time() - t0
     total   = _pass + _fail
     pct     = _pass/max(total,1)*100
@@ -402,7 +541,13 @@ async def run_all_tests(verbose: bool = True):
     else:
         print(f"  {C.BGREEN}All tests passed!{C.RESET}")
     print()
-    return _fail == 0
+    success = _fail == 0
+
+    # Delete the suite database: the fixture rows go with it, so a temp database
+    # never accumulates the rows init_db()'s cleanup would not match.
+    _SUITE_DB.close()
+    print(f"  {C.DIM}Isolated database removed: {not _SUITE_DB.root.exists()}{C.RESET}")
+    return success
 
 
 if __name__ == '__main__':
