@@ -4,12 +4,87 @@ flash_supervisor.py — Process Supervisor
 Monitors flash_loan_engine.py daemon, auto-restarts on crash,
 alerts when $1000 withdrawal threshold is reached.
 """
-import os, sys, time, signal, sqlite3, logging, subprocess
+import os, sys, time, signal, sqlite3, logging, subprocess, importlib, contextlib
 from pathlib import Path
 
 log = logging.getLogger('Supervisor')
-DATA_DIR = Path.home()/'.flash_loan_engine'
-DB_PATH  = DATA_DIR/'flash.db'
+
+# This module lives unpackaged at python/ root, next to the jdl_flash package
+# (see pyproject.toml), so the package may not be on sys.path when we are
+# loaded by path from cli.py / integrate.py.
+_PYTHON_DIR = Path(__file__).resolve().parent
+_RESOLVER_MODULE = 'jdl_flash.paths'
+
+@contextlib.contextmanager
+def _package_importable():
+    """Put this file's directory on sys.path for the duration of one import.
+
+    flash_supervisor.py lives unpackaged at python/ root, so `import jdl_flash`
+    only resolves when that directory is importable. It is normally already on
+    sys.path (an installed package, or cwd when run as `python3
+    flash_supervisor.py`), and in that case this is a no-op.
+
+    It is deliberately *scoped* and reverted on exit. An earlier revision
+    inserted the path permanently and never removed it, which left the whole
+    daemon with a module-shadowing surface for the rest of its life: anything
+    that later prepends to sys.path, or drops a same-named module next to this
+    file, silently changes what the running supervisor imports. Scoping keeps
+    the window to the single import that needs it.
+    """
+    entry = str(_PYTHON_DIR)
+    if entry in sys.path:
+        yield
+        return
+    sys.path.insert(0, entry)
+    try:
+        yield
+    finally:
+        try:
+            sys.path.remove(entry)
+        except ValueError:  # pragma: no cover - another frame removed it first
+            pass
+
+def _resolve_paths():
+    """Resolve (DATA_DIR, DB_PATH) from the one shared resolver.
+
+    The supervisor sums the same `executions` table the engine writes and arms a
+    real `withdrawToken()` off that sum, so it must never decide for itself
+    which database it is looking at. Both paths come from `jdl_flash.paths`,
+    which honours the FLASH_DB_PATH / JDL_FLASH_DB_PATH / FLASH_LOAN_DB_PATH env
+    aliases and otherwise returns the production location — identical to the
+    `Path.home()/'.flash_loan_engine'` this module used to hard-code. Setting no
+    env var therefore changes nothing in production, and setting one redirects
+    the supervisor and the engine together.
+
+    That resolver is *production* code. An earlier revision imported
+    `jdl_flash.test_db_guard` to borrow it, which meant this production module
+    imported a test module — shipping the test module and its `sqlite3.connect`
+    tripwire into the production wheel via pyproject's `packages = ["jdl_flash"]`,
+    and forcing a global monkeypatch to be armed on import and disarmed again on
+    every daemon start. That arm/disarm dance is precisely the fragility that
+    let total_profit() report $0.00 forever: had the disarm ever been skipped or
+    the ordering ever shifted, the tripwire would have refused the real ledger
+    and total_profit()'s bare `except: return 0.0` would have hidden it while the
+    daemon carried on trading. Importing a module that has no side effects
+    removes the failure mode instead of defending against it.
+
+    The fallback is the pre-existing production default. It is only reachable if
+    the shared resolver cannot be imported at all — a broken install, where the
+    supervisor could not launch `jdl_flash.flash_loan_engine` either — and it
+    warns rather than failing, so this wiring can never stop the daemon starting.
+    """
+    fallback_dir = Path.home()/'.flash_loan_engine'
+    fallback_db  = fallback_dir/'flash.db'
+    try:
+        with _package_importable():
+            resolver = importlib.import_module(_RESOLVER_MODULE)
+    except Exception as e:  # noqa: BLE001 - never block daemon startup
+        log.warning(f'Shared DB-path resolver unavailable ({e}); '
+                    f'falling back to {fallback_db}')
+        return fallback_dir, fallback_db
+    return resolver.resolve_engine_data_dir(), resolver.resolve_db_path()
+
+DATA_DIR, DB_PATH = _resolve_paths()
 PID_FILE = DATA_DIR/'daemon.pid'
 LOG_FILE = DATA_DIR/'daemon.log'
 

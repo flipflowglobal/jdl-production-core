@@ -17,6 +17,7 @@ file path instead, same module, no copy-paste.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -41,6 +42,10 @@ _PACKAGED_TESTS = [
     "test_platform_detect.py",
     "test_integrate.py",
     "test_cli.py",
+    # The database-guard suite. Listed so `jdl test` (and therefore CI, which
+    # runs exactly this list) actually executes it: it was missing here, which
+    # made ~600 lines of tripwire tests dead code that nothing ever ran.
+    "test_db_guard.py",
 ]
 
 
@@ -314,14 +319,46 @@ def _resolve_test_suites(filter_str: str | None) -> tuple[Path, list[Path]]:
 
 
 def _run_test_suites(python_dir: Path, suites: list[Path]) -> list[Path]:
-    """Runs each suite, prints its header, returns the ones that failed."""
+    """Runs each suite, prints its header, returns the ones that failed.
+
+    Every suite runs in its own interpreter, so import-time state cannot leak
+    between suites. The child env is given an explicit PYTHONPATH and the
+    JDL_TEST_DB_GUARD marker so that python/sitecustomize.py — which is what
+    that PYTHONPATH makes importable at startup — arms the live-database
+    tripwire before the suite's first line of code executes. A suite written
+    next year that forgets to import the guard itself therefore still cannot
+    open ~/.flash_loan_engine/flash.db.
+    """
     failed = []
+    child_env = _test_child_env(python_dir)
     for suite in suites:
         print(f"\n{'=' * 60}\n  {suite.relative_to(python_dir)}\n{'=' * 60}")
-        rc = subprocess.run([sys.executable, str(suite)], cwd=python_dir).returncode
+        rc = subprocess.run(
+            [sys.executable, str(suite)], cwd=python_dir, env=child_env
+        ).returncode
         if rc != 0:
             failed.append(suite)
     return failed
+
+
+def _test_child_env(python_dir: Path) -> dict[str, str]:
+    """Environment for a suite subprocess: wires the guard's startup hook.
+
+    Returns a copy of the current environment with ``python_dir`` first on
+    ``PYTHONPATH`` (so ``python/sitecustomize.py`` is importable at
+    interpreter startup, ahead of any stdlib copy) and the
+    ``JDL_TEST_DB_GUARD`` marker set. Production processes never get the
+    marker, and the sitecustomize hook is a strict no-op without it — its
+    presence here only ever arms the tripwire for jdl test's own children.
+    """
+    env = dict(os.environ)
+    existing = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p]
+    python_dir_str = str(python_dir)
+    if python_dir_str not in existing:
+        existing.insert(0, python_dir_str)
+    env["PYTHONPATH"] = os.pathsep.join(existing)
+    env["JDL_TEST_DB_GUARD"] = "1"
+    return env
 
 
 def cmd_test(args: argparse.Namespace) -> int:
