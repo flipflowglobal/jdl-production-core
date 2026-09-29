@@ -18,16 +18,49 @@ license-files = ["LICENSE"]
 # The engine's v5/v6 shims + hand-rolled ABI keep it working on either line.
 # The advanced modules are stdlib-only; web3 is only needed for on-chain quotes/exec.
 #
-# Pinned exactly, not left as a "<8" range: web3 7.0.0 added a direct hard
-# dependency on pydantic>=2.4.0, which needs pydantic-core (a compiled Rust/PyO3
-# extension) — there's no published Android wheel for it, so pip falls back to
-# building from source via maturin, which fails outright on Termux ("Failed to
-# determine Android API level"). See requirements_flash.txt for the full
-# writeup, including a second, independent way a wider range here can land on
-# the same failure. This must stay in sync with that file — same package, same
-# venv, same failure mode either way it drifts.
+# Pinned exactly to 6.20.4, not left as a range. A range is unsafe here for three
+# independent reasons. The first two reproduce live on a real Termux device; none
+# of this repo's CI, sandboxes or mainnet-fork tests are a real
+# Android/Bionic-libc environment, so nothing else here can catch any of them:
+#
+#   1. web3 7.0.0 added a direct hard dependency on pydantic>=2.4.0 (checked
+#      against PyPI's published metadata for every 6.x release vs. 7.x — the
+#      whole 6.x line, 6.20.4 included, is pydantic-free; 7.0.0 and every later
+#      7.x release is not). pydantic 2.x is a thin wrapper around pydantic-core,
+#      a compiled Rust/PyO3 extension with no published Android wheel, so pip
+#      falls back to building it from source via maturin, which fails outright on
+#      Termux ("Failed to determine Android API level. Please set the
+#      ANDROID_API_LEVEL environment variable.").
+#
+#   2. The engine performs `from web3.middleware import geth_poa_middleware` at
+#      module import time (flash_loan_engine.py, top of file). 6.20.4 exports
+#      that name; 7.0.0 renamed it to ExtraDataToPOAMiddleware and removed it.
+#      6.20.4 is therefore the NEWEST web3 on PyPI that this engine can import
+#      at all, which makes "<7" the loosest safe specifier and any-6.x the
+#      loosest safe range — there is no upper-bounded range that buys anything.
+#      Note the failure is silent, not loud: that import is wrapped in
+#      try/except ImportError, so crossing into 7.x sets WEB3_OK = False and the
+#      `if CONTRACT and WEB3_OK and LIVE_EXEC` broadcast gate can never be
+#      satisfied. The daemon starts, scans, logs, and can never trade.
+#
+#   3. web3 8.0.0 declares `Requires-Python: <4,>=3.10`, while this project
+#      declares requires-python ">=3.9" (above) and is developed and run on
+#      3.9. The 8.0.0 pin is therefore un-installable on the very interpreter
+#      version the project claims to support: on 3.9 pip reports "No matching
+#      distribution found for web3==8.0.0". That is a real, unyanked PyPI
+#      release rather than a typo, so the error text gives no hint of the real
+#      cause and reads like a non-existent version.
+#
+# Reasons 2 and 3 are the class of break jdl_flash/test_web3_contract.py now
+# asserts against on every `jdl test` run, and .github/dependabot.yml ignores
+# web3 semver-major bumps so it cannot recur unattended.
+#
+# This must stay in sync with requirements_flash.txt — same package, same venv,
+# same failure mode either way it drifts. The web3 pin in the two files is
+# compared directly by test_web3_contract.py, so they cannot drift apart
+# without the suite going red.
 dependencies = [
-    "web3==8.0.0",
+    "web3==6.20.4",
     "python-dotenv>=1.0.0",
 ]
 

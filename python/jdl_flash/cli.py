@@ -46,6 +46,12 @@ _PACKAGED_TESTS = [
     # runs exactly this list) actually executes it: it was missing here, which
     # made ~600 lines of tripwire tests dead code that nothing ever ran.
     "test_db_guard.py",
+    # The web3 import contract. Listed for the same reason, and because it is
+    # the only suite that can fail on a broken/missing web3: test_swarm_wiring.py
+    # force-sets WEB3_OK = True, so a pin that makes the engine's
+    # `from web3.middleware import geth_poa_middleware` fail left the whole
+    # suite green while the engine could not broadcast a single transaction.
+    "test_web3_contract.py",
 ]
 
 
