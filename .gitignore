@@ -17,6 +17,11 @@ logs/
 build/
 revenue_system/__pycache__/
 
+# Local Python virtualenvs (created by setup.sh / bootstrap-linux-env.sh)
+.venv/
+venv/
+env/
+
 # Native extension build artifacts (Cython/C)
 *.so
 _jdl.c
