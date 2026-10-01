@@ -93,6 +93,57 @@ except ImportError:
     def _eth_call(w, tx, block='latest'): raise RuntimeError('web3 not installed')
     def _wait_receipt(w, tx_hash, timeout=180): return None
 
+
+def _gas_shortfall_wei(
+    w3,
+    address: str,
+    gas_limit: int,
+    gas_price_wei,
+    min_headroom_eth: Optional[float] = None,
+) -> int:
+    """Return the shortfall in wei (int, >=1 if underfunded) or 0 if funded.
+
+    The total wei a wallet must hold to safely broadcast is
+        (gas_limit * gas_price_wei) + (min_headroom_eth in wei)
+    where min_headroom_eth defaults to MIN_GAS_ETH. The check is conservative:
+    gas_price_wei can be a float in v5 but is integer-like in practice; we round
+    to int for arithmetic.
+
+    A balance of zero — or one that cannot be read at all — is reported as the
+    *whole* requirement rather than an arbitrary sentinel. Failing closed is the
+    part that matters, but the number is also the only thing the operator sees in
+    the log line explaining why the trade was skipped, so it has to be the amount
+    to deposit and not, say, one wei.
+    """
+    try:
+        gp = int(gas_price_wei) if gas_price_wei else 0
+    except Exception:
+        try:
+            gp = int(float(gas_price_wei) or 0)
+        except Exception:
+            gp = 0
+    if gp < 0:
+        gp = 0
+
+    gl = int(gas_limit) if gas_limit else 0
+    if gl <= 0:
+        gl = 1_200_000
+
+    min_head = MIN_GAS_ETH if min_headroom_eth is None else float(min_headroom_eth)
+    head_wei = max(0, int(min_head * 1e18))
+
+    needed = gl * gp + head_wei
+
+    try:
+        bal_wei = _balance(w3, _w3_cs(address)) if WEB3_OK else 0
+    except Exception:
+        bal_wei = 0
+    if bal_wei <= 0:
+        # Zero or unreadable: the entire requirement is unmet.
+        return max(needed, 1)
+
+    return needed - bal_wei if bal_wei < needed else 0
+
 load_dotenv(os.path.expanduser('~/jdl/.env'))
 
 # Typed, validating readers for every numeric/boolean knob below. They never
@@ -191,6 +242,16 @@ CYCLE_SEC        = 15
 
 # Live execution gate: when off, the engine builds real calldata but never broadcasts.
 LIVE_EXEC = env_bool('LIVE_EXECUTION', 'LIVE_EXEC', 'LIVE_MODE', default=False)
+# Native-ETH gas floor for the broadcasting wallet, in ETH. Checked immediately
+# before every broadcast: an underfunded wallet fails the transaction inside
+# eth_sendRawTransaction with "insufficient funds", which is indistinguishable
+# from a revert to the cycle logic and is charged as a lost trade. Failing the
+# cycle *before* signing is free.
+#
+# Declared here, above the CONFIG_ISSUES snapshot further down — that snapshot is
+# contractually the last env_*() call in this module (see the note above it), so
+# a limit declared below it would be silently exempt from config validation.
+MIN_GAS_ETH     = env_float('MIN_GAS_ETH', 'MIN_ETH_BALANCE', default=0.05, minimum=0.0)
 # Gasless execution via Gelato Relay (ERC-2771 callWithSyncFee): the wallet never needs
 # ETH — Gelato pays gas and is reimbursed from trade profit in the loan asset.
 GELATO_ENABLED   = env_bool('GELATO_ENABLED', 'GASLESS', default=False)
@@ -778,10 +839,33 @@ class FourierCycle:
 # ─────────────────────────────────────────────
 #  REVENUE TRACKER
 # ─────────────────────────────────────────────
+# Rows written by a fixture, a unit test, a simulated cycle or a dry run are not
+# revenue. They are retained in the table for audit — a row that claims profit
+# should never be deletable just because nobody can see it — but every *sum*,
+# *count* and *display* of realised money excludes them.
+#
+# The strategy column is the discriminator: the live path names every real
+# opportunity after the protocol/pair it arbitrages, while synthetic writes use
+# the reserved 'TEST' marker or the 'sim_'/'dry_' prefixes that init_db()'s own
+# housekeeping already treats as non-production. Before this clause existed, the
+# three leftover 'TEST' rows summed to $7.20 and `jdl status` reported it as
+# revenue earned by a system that had never broadcast a transaction.
+_REAL_REVENUE_CLAUSE = (
+    "success=1 "
+    "AND strategy IS NOT 'TEST' "
+    "AND strategy NOT LIKE 'TEST!_%' ESCAPE '!' "
+    "AND strategy NOT LIKE 'sim!_%' ESCAPE '!' "
+    "AND strategy NOT LIKE 'dry!_%' ESCAPE '!'"
+)
+
+
 class RevenueTracker:
     @staticmethod
     def total() -> float:
-        row = db_query('SELECT COALESCE(SUM(net_usd),0) FROM executions WHERE success=1')
+        """Net USD of *real* successful executions only — never a fixture's."""
+        row = db_query(
+            f'SELECT COALESCE(SUM(net_usd),0) FROM executions WHERE {_REAL_REVENUE_CLAUSE}'
+        )
         return float(row[0][0]) if row else 0.0
     @staticmethod
     def log(strategy, gas_m, asset, loan, profit, gas_cost, tx_hash, success=1):
@@ -796,11 +880,12 @@ class RevenueTracker:
     def history(limit=20) -> list:
         return db_query(
             'SELECT ts,strategy,gas_method,loan_usd,profit_usd,net_usd,tx_hash,success '
-            'FROM executions ORDER BY ts DESC LIMIT ?', (limit,)
+            f'FROM executions WHERE {_REAL_REVENUE_CLAUSE} ORDER BY ts DESC LIMIT ?', (limit,)
         )
     @staticmethod
     def count() -> int:
-        row = db_query('SELECT COUNT(*) FROM executions WHERE success=1')
+        """Number of real successful executions — the same rows `total()` sums."""
+        row = db_query(f'SELECT COUNT(*) FROM executions WHERE {_REAL_REVENUE_CLAUSE}')
         return int(row[0][0]) if row else 0
 
 # ─────────────────────────────────────────────
@@ -1348,6 +1433,19 @@ class NexusExecutor:
             except Exception:
                 tx['gas'] = 1_200_000
             tx['gasPrice'] = _gas_p(w3)
+            # Funding floor, checked after the price is known and before signing:
+            # an underfunded wallet is rejected by eth_sendRawTransaction, which
+            # the cycle would then score as a failed (gas-charged) trade. The
+            # wallet must cover this transaction's own max fee, with headroom so
+            # a gas-price spike between check and inclusion cannot strand it.
+            short = _gas_shortfall_wei(w3, acc.address, tx['gas'], tx['gasPrice'])
+            if short:
+                logging.warning(
+                    f'NexusExecutor: skipping broadcast — {acc.address} is short {short / 1e18:.6f} ETH '
+                    f'for a {tx["gas"]} gas @ {tx["gasPrice"]} wei tx '
+                    f'(floor MIN_GAS_ETH={MIN_GAS_ETH}); fund the wallet or use GELATO_ENABLED for gasless'
+                )
+                return None
             signed = acc.sign_transaction(tx)
             raw    = getattr(signed, 'raw_transaction', None) or getattr(signed, 'rawTransaction', None)
             h      = _send_raw(w3, raw)
