@@ -21,6 +21,12 @@ use std::collections::HashMap;
 /// interacts with it (honeypot / dangerous-opcode detection, selector recovery).
 pub mod evm;
 
+/// Read-only JSON-RPC connectivity probe backing `jdl-hotpath probe`.
+///
+/// Kept in the library rather than the binary so the connectivity checker can
+/// link it in-process and so it is unit-testable without spawning a process.
+pub mod probe;
+
 /// Aave V3 flash-loan premium: 0.05% = 5 basis points.
 pub const AAVE_PREMIUM_BPS: f64 = 5.0;
 const BPS_DENOM: f64 = 10_000.0;
