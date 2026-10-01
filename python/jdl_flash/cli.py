@@ -52,6 +52,21 @@ _PACKAGED_TESTS = [
     # `from web3.middleware import geth_poa_middleware` fail left the whole
     # suite green while the engine could not broadcast a single transaction.
     "test_web3_contract.py",
+    # The go-live preflight behind `jdl ready`. Registered because a readiness
+    # gate nobody exercises is a readiness gate nobody can trust: this suite
+    # proves that nothing short of a funded wallet, a deployed receiver, a
+    # reachable chain and explicit consent can ever produce READY.
+    "test_readiness.py",
+    # The pre-broadcast funding guard on NexusExecutor.send — the only code path
+    # that can spend real money. Registered because an untested money-spending
+    # guard is an assumed one, and because this suite pins the guard against the
+    # live gas price and gas estimate rather than a fixed number.
+    "test_executor_funding.py",
+    # Mainnet connectivity verification (endpoint, chain-id, latency, gas price
+    # per runtime, plus a credential-leak teeth probe). Listed so `jdl test` —
+    # and therefore CI — actually runs it; it shipped unregistered, which made
+    # ~1,200 lines of redaction and probe assertions dead code.
+    "test_connectivity.py",
 ]
 
 
@@ -457,6 +472,53 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("--interval", type=float, default=5.0, help="seconds between refreshes (default: 5)")
     p_show.add_argument("--once", action="store_true", help="print a single snapshot and exit")
     p_show.set_defaults(func=cmd_show)
+
+    # Go-live readiness preflight: every blocking precondition for trading.
+    from jdl_flash.readiness import main as _readiness_main
+
+    p_ready = sub.add_parser(
+        "ready",
+        help="verify every precondition for live trading and report exactly what is missing",
+    )
+    p_ready.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    p_ready.set_defaults(func=lambda args: _readiness_main(["--json"] if args.json else []))
+
+    # Connectivity verification subcommand
+    from jdl_flash.connectivity import ALL_CHAINS as _ALL_CHAINS
+    from jdl_flash.connectivity import Platform as _Platform
+    from jdl_flash.connectivity import main as _connectivity_main
+
+    p_conn = sub.add_parser(
+        "connectivity",
+        help="verify every runtime can reach mainnet and is on the right chain",
+    )
+    p_conn.add_argument(
+        "--chain",
+        action="append",
+        choices=[c.key for c in _ALL_CHAINS],
+        help="restrict to these chains (repeatable)",
+    )
+    p_conn.add_argument(
+        "--platform",
+        action="append",
+        choices=[p.value for p in _Platform],
+        help="restrict to these platforms (repeatable)",
+    )
+    p_conn.add_argument("--timeout", type=float, default=15.0)
+    p_conn.add_argument("--json", action="store_true", help="emit JSON")
+
+    def _cmd_connectivity(args):
+        argv = []
+        for c in getattr(args, "chain", []) or []:
+            argv.extend(["--chain", c])
+        for p in getattr(args, "platform", []) or []:
+            argv.extend(["--platform", p])
+        if getattr(args, "timeout", None) is not None:
+            argv.extend(["--timeout", str(args.timeout)])
+        if getattr(args, "json", False):
+            argv.append("--json")
+        return _connectivity_main(argv)
+    p_conn.set_defaults(func=_cmd_connectivity)
 
     p_integrate = sub.add_parser(
         "integrate", help="verify the wiring between every system function (.env, RPC, contract, daemon)"
