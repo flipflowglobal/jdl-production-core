@@ -1,4 +1,10 @@
 node_modules/
+# Foundry's installed libs (forge-std, openzeppelin). Not vendored: setup.sh
+# runs `forge install foundry-rs/forge-std`, and pinning a third-party submodule
+# here would mean reviewing its history on every bump.
+contracts/lib/
+# Written by `forge install`; records the resolved lib revisions for this checkout.
+contracts/foundry.lock
 dist/
 target/
 __pycache__/

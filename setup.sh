@@ -256,6 +256,24 @@ else
             || warn "Foundry auto-install didn't complete (no network, or unsupported platform) — install manually: https://getfoundry.sh"
     fi
 
+    # forge-std is the test framework for test/*.t.sol and is NOT vendored into
+    # the repo (contracts/lib/ is gitignored, like node_modules/). Without it
+    # every Solidity test fails to parse, which presents as "forge is broken"
+    # rather than as a missing dependency — a misleading diagnosis, since `forge
+    # build` still works fine and forge-std is only needed to run the tests.
+    if command -v forge &>/dev/null; then
+        export PATH="$HOME/.foundry/bin:$PATH"
+        if [ -f "$SCRIPT_DIR/contracts/lib/forge-std/src/Test.sol" ]; then
+            ok "forge-std present (contracts/lib/forge-std)"
+        else
+            step "Installing forge-std (Solidity test framework)..."
+            (cd "$SCRIPT_DIR/contracts" && forge install foundry-rs/forge-std 2>&1) \
+                && ok "forge-std installed" \
+                || warn "forge-std install failed — Solidity tests will not parse. See above."
+            info "Manual equivalent: cd contracts && forge install foundry-rs/forge-std"
+        fi
+    fi
+
     # ── 3d. Rust — jdl_native's optional hotpath extension ──
     step "Checking Rust..."
     if command -v cargo &>/dev/null; then
