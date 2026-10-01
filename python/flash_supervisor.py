@@ -97,17 +97,29 @@ class C:
     R="\033[0m"; B="\033[1m"; RED="\033[31m"; GRN="\033[32m"
     YLW="\033[33m"; CYN="\033[36m"; BGRN="\033[92m"; BYLW="\033[93m"; BCYN="\033[96m"
 
+# Same real-revenue clause the engine's RevenueTracker applies (flash_loan_engine.py
+# `_REAL_REVENUE_CLAUSE`). A fixture/test/sim/dry row is retained in the table for
+# audit but must never count as money earned: summing 'TEST' rows here is what made
+# `jdl status` print $7.20 of revenue for a system that had never broadcast a tx.
+REAL_REVENUE_WHERE = (
+    "success=1 "
+    "AND strategy IS NOT 'TEST' "
+    "AND strategy NOT LIKE 'TEST!_%' ESCAPE '!' "
+    "AND strategy NOT LIKE 'sim!_%' ESCAPE '!' "
+    "AND strategy NOT LIKE 'dry!_%' ESCAPE '!'"
+)
+
 def total_profit() -> float:
     try:
         con=sqlite3.connect(DB_PATH)
-        r=con.execute('SELECT COALESCE(SUM(net_usd),0) FROM executions WHERE success=1').fetchone()
+        r=con.execute(f'SELECT COALESCE(SUM(net_usd),0) FROM executions WHERE {REAL_REVENUE_WHERE}').fetchone()
         con.close(); return float(r[0])
     except: return 0.0
 
 def exec_count() -> int:
     try:
         con=sqlite3.connect(DB_PATH)
-        r=con.execute('SELECT COUNT(*) FROM executions WHERE success=1').fetchone()
+        r=con.execute(f'SELECT COUNT(*) FROM executions WHERE {REAL_REVENUE_WHERE}').fetchone()
         con.close(); return int(r[0])
     except: return 0
 

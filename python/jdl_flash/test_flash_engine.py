@@ -296,13 +296,46 @@ def test_revenue_tracker():
     init_db()
     before = RevenueTracker.total()
     net = RevenueTracker.log('TEST','UNIT','0xTEST',1000.0,2.5,0.1,REVENUE_TEST_TX_HASH,1)
-    after = RevenueTracker.total()
-    check('Revenue increases after log', after >= before, f'{before:.4f}->{after:.4f}')
     check('net returned correctly', abs(net - 2.4) < 0.01, f'net={net}')
+
+    # A 'TEST' row must not move revenue. This is the exact regression that let
+    # three leftover fixture rows ($2.40 each) present as $7.20 of earnings for a
+    # system that had never broadcast a transaction: total()/count()/history()
+    # summed every success=1 row regardless of strategy.
+    after = RevenueTracker.total()
+    check('A TEST row does not count as revenue',
+          abs(after - before) < 1e-9, f'{before:.4f}->{after:.4f}')
     cnt = RevenueTracker.count()
-    check('Count >= 1', cnt >= 1, str(cnt))
     hist = RevenueTracker.history(5)
-    check('History returns rows', len(hist) >= 1)
+    check('A TEST row is not counted', cnt == 0, f'count={cnt}')
+    check('History is empty before any real row', len(hist) == 0, f'rows={len(hist)}')
+    check('A TEST row is absent from history',
+          not any(r[6] == REVENUE_TEST_TX_HASH for r in hist),
+          f'history={len(hist)} rows')
+
+    # The real path does count, and the delta is exactly the logged net.
+    real_net = RevenueTracker.log('arb-uni-v3','UNIT','0xREAL',1000.0,5.0,0.25,'0xreal_tx',1)
+    check('net from a real strategy is profit - gas',
+          abs(real_net - 4.75) < 0.01, f'net={real_net}')
+    check('Revenue increases after a real log',
+          abs(RevenueTracker.total() - (before + 4.75)) < 1e-9,
+          f'{RevenueTracker.total()} vs {before + 4.75}')
+    check('A real row is counted',
+          RevenueTracker.count() == cnt + 1, f'count={RevenueTracker.count()}')
+    check('A real row appears in history',
+          any(r[6] == '0xreal_tx' for r in RevenueTracker.history(5)))
+    # sim_/dry_ rows are excluded too (init_db() housekeeping prefixes).
+    RevenueTracker.log('sim_scan','UNIT','0xTEST',1000.0,9.0,0.0,'0xsim_tx',1)
+    RevenueTracker.log('dry_run','UNIT','0xTEST',1000.0,9.0,0.0,'0xdry_tx',1)
+    check('A sim_ row does not count as revenue',
+          abs(RevenueTracker.total() - (before + 4.75)) < 1e-9,
+          f'{RevenueTracker.total()}')
+    check('A dry_ row does not count as revenue',
+          abs(RevenueTracker.total() - (before + 4.75)) < 1e-9,
+          f'{RevenueTracker.total()}')
+    check('Revenue stays put after sim_/dry_ rows',
+          RevenueTracker.count() == cnt + 1, f'count={RevenueTracker.count()}')
+
     # The row exists in the suite's temp database, and only there.
     check('Fixture row landed in the isolated database',
           _row_count(REVENUE_TEST_TX_HASH) == 1,
@@ -324,8 +357,21 @@ def test_revenue_tracker():
               _row_count(REVENUE_TEST_TX_HASH) == 0,
               f'rows={_row_count(REVENUE_TEST_TX_HASH)}')
         check('Revenue total restored after cleanup',
+              abs(RevenueTracker.total() - (before + 4.75)) < 1e-9,
+              f'{RevenueTracker.total()} vs {before + 4.75}')
+
+    # Remove the real row too: the post-run hygiene assertions below require the
+    # suite database to hold no fixture rows at all when main() finishes.
+    try:
+        purge_execution_rows(_SUITE_DB.db_path, ['0xreal_tx', '0xsim_tx', '0xdry_tx'])
+    except LiveDatabaseError as exc:  # pragma: no cover - guard must not fire here
+        check('Cleanup of the real-path rows targets the isolated database', False, str(exc))
+    else:
+        check('Revenue back to the starting value after full cleanup',
               abs(RevenueTracker.total() - before) < 1e-9,
               f'{RevenueTracker.total()} vs {before}')
+        check('Execution count back to the starting value',
+              RevenueTracker.count() == 0, f'count={RevenueTracker.count()}')
 
 
 def _row_count(tx_hash: str) -> int:
