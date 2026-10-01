@@ -214,6 +214,10 @@ class TestDbGuard:
     individual test having asked for an isolated database.
     """
 
+    # Not a pytest test class — the tripwire happens to be named like one, which
+    # made pytest try (and fail) to collect it on every run.
+    __test__ = False
+
     def __init__(self, real_connect: Any) -> None:
         self._real_connect = real_connect
         self.armed = True

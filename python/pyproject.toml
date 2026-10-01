@@ -72,6 +72,21 @@ jdl       = "jdl_flash.cli:main"
 # The top-level scripts trading_core.py and flash_supervisor.py are standalone
 # entrypoints shipped/launched via setup.sh — they are intentionally NOT
 # packaged here (they live at python/ root, outside the importable packages below).
+[tool.pytest.ini_options]
+# asyncio_mode = "auto" makes pytest execute `async def test_*` functions on a
+# managed event loop instead of collecting them as unrun coroutines.
+#
+# Regression: jdl_flash/test_flash_engine.py declares test_scanner and
+# test_daemon_cycle as coroutines and awaits them from its own main() under
+# `jdl test`. Under pytest they were collected in strict mode and reported as
+# plain failures ("async def functions are not natively supported"), so a direct
+# `pytest python/` run could never have been green even when the suite the CI
+# actually runs passed. These are genuine tests of the live scan and cycle
+# paths, so they are made runnable rather than removed.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["jdl_flash", "test_flash_supervisor.py"]
+
 [tool.setuptools]
 packages = ["jdl_flash", "jdl_native"]
 

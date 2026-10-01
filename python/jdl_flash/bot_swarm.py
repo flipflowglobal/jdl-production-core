@@ -77,7 +77,23 @@ class BotSwarm:
         self._nonce_base = nonce_base
         self._stats: List[WorkerStats] = [WorkerStats() for _ in range(n_workers)]
         # Each worker has its own queue so execution is serialised per nonce lane.
-        self._queues: List[asyncio.Queue] = [asyncio.Queue() for _ in range(n_workers)]
+        #
+        # Constructed here but bound to no loop yet: on Python 3.9 asyncio.Queue()
+        # captures the *current* event loop at construction time, so building them
+        # eagerly in __init__ raised
+        #   RuntimeError: There is no current event loop in thread 'MainThread'
+        # whenever a swarm was constructed from synchronous code (a test, a CLI
+        # path, `make_swarm()` before asyncio.run) — the object could not even be
+        # created, let alone run. The queues are therefore created lazily inside
+        # `run()`, where a loop is guaranteed to be running and the queues bind to
+        # it correctly. See `_ensure_queues`.
+        self._queues: List[asyncio.Queue] = []
+
+    def _ensure_queues(self) -> List[asyncio.Queue]:
+        """Create the per-lane queues on first use, inside the running loop."""
+        if not self._queues:
+            self._queues = [asyncio.Queue() for _ in range(self._n)]
+        return self._queues
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -104,7 +120,7 @@ class BotSwarm:
     async def _worker(self, worker_id: int, rounds: int, interval: float) -> None:
         """Scan loop for a single worker."""
         stats = self._stats[worker_id]
-        queue = self._queues[worker_id]
+        queue = self._ensure_queues()[worker_id]
         for _ in range(rounds):
             t0 = time.monotonic()
             try:
@@ -130,10 +146,11 @@ class BotSwarm:
         Serialised within the nonce lane: nonces are handed out strictly in order
         nonce_base + worker_id, then + n_workers, then + 2*n_workers, etc.
         """
+        queue = self._ensure_queues()[worker_id]
         if self._exec_fn is None:
             # Still drain the queue so it doesn't block workers.
             while True:
-                item = await self._queues[worker_id].get()
+                item = await queue.get()
                 if item is None:
                     break
             return
@@ -142,7 +159,7 @@ class BotSwarm:
         nonce = self._nonce_base + worker_id
         stride = self._n
         while True:
-            item = await self._queues[worker_id].get()
+            item = await queue.get()
             if item is None:
                 break
             try:
@@ -174,6 +191,10 @@ class BotSwarm:
         """
         if rounds < 1:
             return
+
+        # Bind the lane queues to the loop that is running us, not to whatever
+        # loop happened to be current when this object was constructed.
+        self._ensure_queues()
 
         tasks: List[asyncio.Task] = []
         for i in range(self._n):
