@@ -53,11 +53,19 @@ def _supervisor_extra_paths(database: IsolatedDatabase) -> dict:
     }
 
 
-def _create_executions(db_path, rows):
+def _create_executions(db_path, rows, strategy="arb-uni-v3"):
     """Create the supervisor's read query target: a real `executions` table.
 
     Mirrors the subset of the schema flash_loan_engine.init_db() creates that
     flash_supervisor.total_profit() / exec_count() actually read.
+
+    ``strategy`` defaults to a live-path name rather than 'TEST'. total_profit()
+    and exec_count() now apply the same real-revenue clause the engine's
+    RevenueTracker applies (see REAL_REVENUE_WHERE in flash_supervisor.py): a
+    'TEST'/'sim_'/'dry_' row is retained for audit but excluded from revenue. A
+    fixture that seeded only 'TEST' rows would therefore assert 0.0 and prove
+    nothing, so the exclusion is asserted directly in
+    test_synthetic_rows_are_not_revenue instead.
     """
     con = sqlite3.connect(db_path)
     try:
@@ -81,7 +89,7 @@ def _create_executions(db_path, rows):
                 'INSERT INTO executions(ts,strategy,gas_method,asset,loan_usd,'
                 'profit_usd,gas_cost_usd,net_usd,tx_hash,success) '
                 'VALUES(?,?,?,?,?,?,?,?,?,?)',
-                (0.0, "TEST", "UNIT", "0xTEST", 1000.0, net_usd, 0.0, net_usd, tx_hash, success),
+                (0.0, strategy, "UNIT", "0xTEST", 1000.0, net_usd, 0.0, net_usd, tx_hash, success),
             )
         con.commit()
     finally:
@@ -224,6 +232,43 @@ def test_supervisor_reads_only_the_isolated_db(check):
         _create_executions(database.db_path, [("0xbig", 1500.0, 1)])
         check(fs.total_profit() >= fs.THRESHOLD,
               "threshold arithmetic is unchanged and reads the temp db")
+
+
+def test_synthetic_rows_are_not_revenue(check):
+    """TEST/sim_/dry_ rows are retained for audit but never summed as revenue.
+
+    The live regression: three leftover 'TEST' rows ($2.40 net each) sat in the
+    revenue ledger, and because total_profit() summed every success=1 row, `jdl
+    status` reported $7.20 of earnings for a system that had never broadcast a
+    transaction. Rows are still written (auditability); only the sums exclude them.
+    """
+    with IsolatedDatabase(prefix="jdl_supervisor_synthetic_") as database:
+        database.apply_to(fs, extra=_supervisor_extra_paths(database))
+
+        # One real win, plus synthetic rows in every reserved flavour.
+        _create_executions(database.db_path, [("0xreal", 5.0, 1)])
+        _create_executions(database.db_path, [("0xtest", 2.4, 1)], strategy="TEST")
+        _create_executions(database.db_path, [("0xtest2", 3.0, 1)], strategy="TEST_sweep")
+        _create_executions(database.db_path, [("0xsim", 100.0, 1)], strategy="sim_scan")
+        _create_executions(database.db_path, [("0xdry", 50.0, 1)], strategy="dry_run")
+
+        check(fs.total_profit() == 5.0,
+              f"only the real row counts (got ${fs.total_profit():.2f})")
+        check(fs.exec_count() == 1,
+              f"only the real row is counted (got {fs.exec_count()})")
+
+        # A synthetic row large enough to arm a withdrawal must still not arm it.
+        _create_executions(database.db_path, [("0xsimbig", 5000.0, 1)], strategy="sim_scan")
+        check(fs.total_profit() < fs.THRESHOLD,
+              "a synthetic row can never arm the withdrawal threshold")
+
+        # Excluded from revenue, but not deleted — the ledger stays auditable.
+        con = sqlite3.connect(database.db_path)
+        try:
+            kept = con.execute("SELECT COUNT(*) FROM executions").fetchone()[0]
+        finally:
+            con.close()
+        check(kept == 6, f"every synthetic row is retained in the table (got {kept})")
 
     check(fs.DB_PATH == default_db_path(),
           "the supervisor's DB_PATH is restored when the fixture closes")
@@ -511,6 +556,7 @@ def main():
     test_db_guard_active(check)
     test_live_db_is_refused(check)
     test_supervisor_reads_only_the_isolated_db(check)
+    test_synthetic_rows_are_not_revenue(check)
     test_fixture_rows_do_not_survive(check)
     test_production_import_does_not_arm_tripwire(check)
     test_env_override_wiring(check)

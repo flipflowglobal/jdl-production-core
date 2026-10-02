@@ -16,9 +16,9 @@
 #      extension with no published Android wheel, so pip falls back to building
 #      it from source via maturin — which fails outright on Termux with "Failed
 #      to determine Android API level. Please set the ANDROID_API_LEVEL
-#      environment variable." A `web3<8` (or even `<7`) range lets pip's
-#      resolver land here the moment anything ELSE in this file nudges it away
-#      from the exact verified point release — which is exactly what #2 does.
+#      environment variable." A `web3<7` (or even a bare `web3`) range lets
+#      pip's resolver land here the moment anything ELSE in this file nudges it
+#      away from the exact verified point release — which is exactly what #2 does.
 #
 #   2. hexbytes>=1.3.1 used to be pinned here directly, and it is incompatible
 #      with EVERY 6.x web3 release: web3 6.20.4 itself requires hexbytes<0.4.0.
@@ -27,15 +27,38 @@
 #      normal upper bound on eth-account entirely (only 6.20.4 caps it at
 #      eth-account<0.13) — landing on eth-account>=0.14, which itself requires
 #      pydantic>=2, hitting failure #1 by an entirely different path. There is
-#      no dedicated hexbytes pin below: web3==8.0.0 already pulls the exact
-#      hexbytes it was built and verified against (0.3.x), and the engine's own
-#      hex-decoding call sites (e.g. gelato_relay.py's `.replace("0x", "")`
-#      after `.hex()`) already tolerate either hexbytes API shape defensively —
-#      nothing in this codebase actually requires hexbytes>=1.3.1's behavior.
-#      (A Dependabot PR bumped that pin to hexbytes>=2.0.0 in the meantime —
-#      same conflict, worse, since 2.0.0 is further still from <0.4.0. Removing
-#      the pin entirely, as here, is the fix for both.)
-web3==8.0.0
+#      no dedicated hexbytes pin below, because web3==6.20.4 declares
+#      `hexbytes<0.4.0,>=0.1.0` and therefore pulls a 0.3.x hexbytes itself —
+#      0.3.x is the hexbytes line 6.20.4 was built and verified against, and it
+#      is what this venv resolves to. (It is emphatically *not* the 8.x line's:
+#      web3 8.0.0 requires hexbytes>=2.) The engine's own hex-decoding call
+#      sites (e.g. gelato_relay.py's `.replace("0x", "")` after `.hex()`) already
+#      tolerate either hexbytes API shape defensively — nothing in this codebase
+#      actually requires hexbytes>=1.3.1's behavior. (A Dependabot PR bumped
+#      that pin to hexbytes>=2.0.0 in the meantime — same conflict, worse, since
+#      2.0.0 is further still from <0.4.0. Removing the pin entirely, as here,
+#      is the fix for both.)
+#
+# Two further reasons this file must stay pinned at 6.20.4 rather than tracking
+# the latest web3, both verified against PyPI's published metadata:
+#
+#   3. `from web3.middleware import geth_poa_middleware` — the engine's actual
+#      import, at flash_loan_engine.py module-import time — exists in 6.20.4 and
+#      was RENAMED to ExtraDataToPOAMiddleware in 7.0.0, which removed the old
+#      name. 6.20.4 is the newest web3 this engine can import. Crossing that
+#      boundary does not crash: the import sits in a try/except ImportError that
+#      sets WEB3_OK = False, and the `if CONTRACT and WEB3_OK and LIVE_EXEC`
+#      broadcast gate then can never be satisfied — a daemon that scans forever
+#      and never trades, with a green-looking test suite (test_swarm_wiring.py
+#      force-sets WEB3_OK = True, so it cannot see this). jdl_flash/
+#      test_web3_contract.py covers exactly that import and runs in `jdl test`.
+#
+#   4. web3 8.0.0 requires Python >=3.10. This project supports 3.9 (see
+#      pyproject.toml's requires-python) and Termux ships 3.9-class
+#      interpreters, so an 8.0.0 pin is un-installable here outright: pip
+#      reports "No matching distribution found for web3==8.0.0", which reads
+#      like a non-existent version but is really a Requires-Python filter.
+web3==6.20.4
 requests>=2.34.2
 python-dotenv>=1.0.0
 aiohttp>=3.14.3

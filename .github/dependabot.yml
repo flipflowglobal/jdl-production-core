@@ -13,6 +13,25 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # web3 is pinned EXACTLY (6.20.4) and a major bump is never a drop-in here.
+    # Two independent, silent failure modes make an automated major bump actively
+    # dangerous, and both have already bitten this repo:
+    #   * web3 7.0.0 renamed `geth_poa_middleware` to `ExtraDataToPOAMiddleware`
+    #     and removed the old name. The engine imports it inside a
+    #     try/except ImportError at module-import time, so a 7.x install sets
+    #     WEB3_OK = False instead of failing loudly, and the
+    #     `if CONTRACT and WEB3_OK and LIVE_EXEC` broadcast gate can never be
+    #     satisfied: the daemon scans forever and never trades. Nothing in the
+    #     old suite could see this (test_swarm_wiring.py force-sets
+    #     WEB3_OK = True). jdl_flash/test_web3_contract.py covers it now.
+    #   * web3 8.0.0 requires Python >=3.10 while this project supports 3.9, so
+    #     an 8.0.0 pin is simply un-installable on a supported interpreter.
+    # Minor/patch updates within the pinned 6.x line still flow normally via the
+    # group above; majors are a deliberate, human-run migration. See the comment
+    # above `dependencies` in python/pyproject.toml and python/requirements_flash.txt.
+    ignore:
+      - dependency-name: "web3"
+        update-types: ["version-update:semver-major"]
     labels:
       - "dependencies"
       - "python"
